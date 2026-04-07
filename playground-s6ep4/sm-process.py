@@ -17,30 +17,6 @@ from sklearn.exceptions import DataConversionWarning
 
 warnings.filterwarnings(action="ignore", category=DataConversionWarning)
 
-
-columns = [
-    "age",
-    "education",
-    "major industry code",
-    "class of worker",
-    "num persons worked for employer",
-    "capital gains",
-    "capital losses",
-    "dividends from stocks",
-    "income",
-]
-class_labels = [" - 50000.", " 50000+."]
-
-
-def print_shape(df):
-    negative_examples, positive_examples = np.bincount(df["income"])
-    print(
-        "Data shape: {}, {} positive examples, {} negative examples".format(
-            df.shape, positive_examples, negative_examples
-        )
-    )
-
-
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--train-test-split-ratio", type=float, default=0.2)
