@@ -10,6 +10,7 @@ from sklearn.preprocessing import PolynomialFeatures
 from sklearn.compose import make_column_transformer
 from sklearn.preprocessing import LabelEncoder
 from sklearn.preprocessing import StandardScaler
+from sklearn.utils import resample
 
 
 from sklearn.exceptions import DataConversionWarning
