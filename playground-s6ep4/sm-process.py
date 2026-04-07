@@ -36,14 +36,14 @@ if __name__ == "__main__":
   
     print("Running preprocessing and feature engineering transformations")
 
-
     df_x = df_tv.iloc[:,1:-1]
-
+    
     df_dummy = pd.get_dummies(df_x, dtype=int, drop_first=False)
     continous_variables = df_dummy.select_dtypes(['float64']).columns
     index = [df_dummy.columns.get_loc(col) for col in continous_variables]
 
     x = df_dummy.iloc[:,:].values
+    #newcolumns = x.columns.values.tolist() + ['Irrigation_Need']
     y = df_tv.iloc[:,-1].values
 
     class_le = LabelEncoder()
@@ -97,6 +97,10 @@ if __name__ == "__main__":
         X_train = X_train_balanced[perm]
         y_train = y_train_balanced[perm]
 
+        #train_features = np.hstack((X_train, y_train.reshape(-1, 1)))
+        #df_train = pd.DataFrame(train_features, columns=newcolumns)
+    
+
     train_features = X_train
     test_features = X_test if testing_mode else None
     print("Train data shape after preprocessing: {}".format(train_features.shape))
@@ -115,7 +119,7 @@ if __name__ == "__main__":
     pd.DataFrame(test_features).to_csv(test_features_output_path, header=False, index=False)
 
     print("Saving training labels to {}".format(train_labels_output_path))
-    y_train.to_csv(train_labels_output_path, header=False, index=False)
+    pd.DataFrame(y_train).to_csv(train_labels_output_path, header=False, index=False)
 
     print("Saving test labels to {}".format(test_labels_output_path))
-    y_test.to_csv(test_labels_output_path, header=False, index=False)
+    pd.DataFrame(y_test).to_csv(test_labels_output_path, header=False, index=False)
