@@ -4,7 +4,7 @@ import tarfile
 
 import pandas as pd
 
-from sklearn.externals import joblib
+import joblib
 from sklearn.metrics import classification_report, roc_auc_score, accuracy_score
 
 if __name__ == "__main__":
@@ -21,12 +21,12 @@ if __name__ == "__main__":
 
     X_test = pd.read_csv(test_features_data, header=None)
     y_test = pd.read_csv(test_labels_data, header=None)
-    predictions = model.predict(X_test)
+    predictions = model.predict_proba(X_test)
 
     print("Creating classification evaluation report")
-    report_dict = classification_report(y_test, predictions, output_dict=True)
-    report_dict["accuracy"] = accuracy_score(y_test, predictions)
-    report_dict["roc_auc"] = roc_auc_score(y_test, predictions)
+    report_dict = classification_report(y_test, predictions.argmax(axis=1), output_dict=True)
+    report_dict["accuracy"] = accuracy_score(y_test, predictions.argmax(axis=1))
+    #report_dict["roc_auc"] = roc_auc_score(y_test, predictions, multi_class="ovo")
 
     print("Classification report:\n{}".format(report_dict))
 
