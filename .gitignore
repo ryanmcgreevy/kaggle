@@ -1,6 +1,7 @@
 data/
 data
 catboost_info/
+*.npy
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
