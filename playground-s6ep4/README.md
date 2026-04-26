@@ -3,7 +3,7 @@
 [Competition link](https://www.kaggle.com/competitions/playground-series-s6e4/overview)
 
 ## Overview
-This repository contains my Kaggle competition in over a decade and marks my return to data science and machine learning work.
+This repository contains my first Kaggle competition in over a decade and marks my return to data science and machine learning work.
 
 The main objective was learning: reacquainting myself with the Kaggle platform and practicing modern ML workflows, tools, and frameworks.
 
