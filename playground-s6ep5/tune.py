@@ -19,6 +19,7 @@ from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 from sklearn.preprocessing import TargetEncoder
 from sklearn.compose import ColumnTransformer
+import argparse
 
 
 
@@ -41,7 +42,7 @@ def lgb_objective(trial, x, y, scoring, pipeline):
             "max_bin": lgb_max_bins,
             "reg_alpha": lgb_reg_alpha,
             "min_data_in_leaf": lgb_min_data_in_leaf,
-            "objective": 'multiclass',
+            "objective": 'binary',
             'boosting_type': 'gbdt',
             #"device": 'cuda',
             "random_state": 1
@@ -180,7 +181,7 @@ def process_data():
     return pipe, X_full, y
 
 
-def main():
+def main(args=None):
 
     # loading variables from .env file
     load_dotenv() 
@@ -199,18 +200,36 @@ def main():
     # Define the scoring metric
     scoring = make_scorer(roc_auc_score)
 
-    print("Running lightGBM hyperparameter tuning...")
-    # Run Optuna study for LightGBM
-    run_optuna_study(lgb_objective, X, y, scoring, run_name="LGBM Hyperparameter Tuning", pipeline=pipe, n_trials=50)
+    match args.classifier:
+        case 'lgbm':
+            my_objective = lgb_objective
+            classifier = "LightGBM"
+        case 'cb':
+            my_objective = cb_objective
+            classifier = "CatBoost"
+        case 'hgb':
+            my_objective = hb_objective
+            classifier = "HistGradientBoosting"
+        case _:
+            raise ValueError("Invalid classifier choice. Please choose from 'lgbm', 'cb', or 'hgb'.")
+    
+    run_optuna_study(my_objective, X, y, scoring, run_name=f"{classifier} Hyperparameter Tuning", pipeline=pipe, n_trials=50)
 
-    print("Running CatBoost hyperparameter tuning...")
-    # Run Optuna study for CatBoost
-    run_optuna_study(cb_objective, X, y, scoring, run_name="CatBoost Hyperparameter Tuning", pipeline=pipe, n_trials=50)
+    # print("Running lightGBM hyperparameter tuning...")
+    # # Run Optuna study for LightGBM
+    # run_optuna_study(lgb_objective, X, y, scoring, run_name="LGBM Hyperparameter Tuning", pipeline=pipe, n_trials=50)
 
-    print("Running HistGradientBoosting hyperparameter tuning...")
-    # Run Optuna study for HistGradientBoosting
-    run_optuna_study(hb_objective, X, y, scoring, run_name="HistGradientBoosting Hyperparameter Tuning", pipeline=pipe, n_trials=50)
+    # print("Running CatBoost hyperparameter tuning...")
+    # # Run Optuna study for CatBoost
+    # run_optuna_study(cb_objective, X, y, scoring, run_name="CatBoost Hyperparameter Tuning", pipeline=pipe, n_trials=50)
+
+    # print("Running HistGradientBoosting hyperparameter tuning...")
+    # # Run Optuna study for HistGradientBoosting
+    # run_optuna_study(hb_objective, X, y, scoring, run_name="HistGradientBoosting Hyperparameter Tuning", pipeline=pipe, n_trials=50)
 
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser(description="Hyperparameter tuning for LightGBM, CatBoost, and HistGradientBoosting using Optuna and MLflow.")
+    parser.add_argument('--classifier', type=str, required=True, help="Choose the classifier to tune: 'lgbm', 'cb', or 'hgb'")
+    args = parser.parse_args()
+    main(args)
