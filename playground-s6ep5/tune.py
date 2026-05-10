@@ -56,6 +56,8 @@ def lgb_objective(trial, x, y, scoring, pipeline):
 
         scores = cross_val_score(pipeline, x, y, scoring=scoring, cv=5)
     
+        pipeline.steps.pop()  # Remove the classifier step to avoid affecting subsequent trials
+
         # # Log current trial's error metric
         mlflow.log_metrics({"mean_score": np.mean(scores), "median_score": np.median(scores)})
 
@@ -101,6 +103,8 @@ def cb_objective(trial, x, y, scoring, pipeline):
 
         scores = cross_val_score(pipeline, x, y, scoring=scoring, cv=5)
 
+        pipeline.steps.pop()  # Remove the classifier step to avoid affecting subsequent trials
+
         # # Log current trial's error metric
         mlflow.log_metrics({"mean_score": np.mean(scores), "median_score": np.median(scores)})
 
@@ -138,6 +142,8 @@ def hb_objective(trial, x, y, scoring, pipeline):
 
         scores = cross_val_score(pipeline, x, y, scoring=scoring, cv=5)
 
+        pipeline.steps.pop()  # Remove the classifier step to avoid affecting subsequent trials
+        
         # # Log current trial's error metric
         mlflow.log_metrics({"mean_score": np.mean(scores), "median_score": np.median(scores)})
 
@@ -145,6 +151,7 @@ def hb_objective(trial, x, y, scoring, pipeline):
         mlflow.sklearn.log_model(regressor_obj, name="model")
         # Make it easy to retrieve the best-performing child run later
         trial.set_user_attr("run_id", child_run.info.run_id)
+
         #return error
         return np.min([np.mean(scores), np.median(scores)])
     
