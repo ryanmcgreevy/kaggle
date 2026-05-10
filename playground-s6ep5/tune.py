@@ -180,7 +180,7 @@ def process_data():
     return pipe, X_full, y
 
 
-def __main__():
+def main():
 
     # loading variables from .env file
     load_dotenv() 
@@ -188,18 +188,29 @@ def __main__():
     # Set up MLflow tracking
     mlflow.set_tracking_uri(os.getenv('MLFLOW_SERVER'))
     mlflow.set_experiment("S6E5: Hyperparameter Tuning Experiment")
+
+    print("MLflow tracking URI:", mlflow.get_tracking_uri())
     
     #read data and define pipeline
     pipe, X, y = process_data()
 
+    print("Data loaded and pipeline defined. Starting hyperparameter tuning...")
+
     # Define the scoring metric
     scoring = make_scorer(roc_auc_score)
 
+    print("Running lightGBM hyperparameter tuning...")
     # Run Optuna study for LightGBM
     run_optuna_study(lgb_objective, X, y, scoring, run_name="LGBM Hyperparameter Tuning", pipeline=pipe, n_trials=50)
 
+    print("Running CatBoost hyperparameter tuning...")
     # Run Optuna study for CatBoost
     run_optuna_study(cb_objective, X, y, scoring, run_name="CatBoost Hyperparameter Tuning", pipeline=pipe, n_trials=50)
 
+    print("Running HistGradientBoosting hyperparameter tuning...")
     # Run Optuna study for HistGradientBoosting
     run_optuna_study(hb_objective, X, y, scoring, run_name="HistGradientBoosting Hyperparameter Tuning", pipeline=pipe, n_trials=50)
+
+
+if __name__ == "__main__":
+    main()
