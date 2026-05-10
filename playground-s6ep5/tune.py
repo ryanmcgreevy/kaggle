@@ -180,7 +180,7 @@ def process_data():
     return pipe, X_full, y
 
 
-def main():
+def __main__():
 
     # loading variables from .env file
     load_dotenv() 
