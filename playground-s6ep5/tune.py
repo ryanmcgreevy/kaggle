@@ -84,7 +84,7 @@ def cb_objective(trial, x, y, scoring, pipeline):
             "learning_rate": cb_learning_rate,
             "l2_leaf_reg": cb_l2_leaf_reg,
             'bagging_temperature': bagging_temperature,
-            'loss_function': 'MultiClass',
+            'loss_function': 'Logloss',
             'verbose': False,
             'task_type': 'GPU',
             #"device": 'cuda',
