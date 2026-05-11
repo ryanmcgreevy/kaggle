@@ -205,8 +205,8 @@ def main(args=None):
     print("Data loaded and pipeline defined. Starting hyperparameter tuning...")
 
     # Define the scoring metric
-    scoring = make_scorer(roc_auc_score)
-
+    # scoring = make_scorer(roc_auc_score)
+    scoring = 'roc_auc'
     match args.classifier:
         case 'lgbm':
             my_objective = lgb_objective
