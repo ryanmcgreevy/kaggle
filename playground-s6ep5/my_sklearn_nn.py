@@ -106,7 +106,8 @@ class MyNNClassifier(ClassifierMixin, BaseEstimator):
         optimizer = torch.optim.Adam(self.model.parameters(), lr=0.001, weight_decay=0.0001)
         torch.manual_seed(1)
         num_epochs = 20
-        y = y.to_numpy().reshape(-1, 1)
+        #y = y.to_numpy().reshape(-1, 1)
+        y = y.reshape(-1, 1)
         train_ds = TensorDataset(torch.tensor(X).float(), torch.tensor(y).float())
         train_dl = DataLoader(train_ds, batch_size=batch_size, shuffle=True)
 
