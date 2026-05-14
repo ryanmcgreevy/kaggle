@@ -20,7 +20,8 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.preprocessing import TargetEncoder
 from sklearn.compose import ColumnTransformer
 import argparse
-
+from my_sklearn_nn import MyNNClassifier
+import torch
 
 
 def lgb_objective(trial, x, y, scoring, pipeline):
@@ -154,7 +155,45 @@ def hb_objective(trial, x, y, scoring, pipeline):
 
         #return error
         return np.min([np.mean(scores), np.median(scores)])
-    
+def nn_objective(trial, x, y, scoring, pipeline):
+    # Setting nested=True will create a child run under the parent run.
+    with mlflow.start_run(nested=True, run_name=f"trial_{trial.number}") as child_run:
+        nn_epochs = trial.suggest_int("nn_epochs", 10, 50, step=10)
+        nn_learning_rate = trial.suggest_float("nn_learning_rate", 0.001, 0.1, log=True)
+        nn_weight_decay = trial.suggest_float("nn_weight_decay", 1e-6, 1e-1, log=True)
+        nn_width = trial.suggest_int("nn_width", x.shape[1], x.shape[1]*3, step=4)
+        nn_depth = trial.suggest_int("nn_depth", 1, 10, step=1)
+
+        params = {
+            "epochs": nn_epochs,
+            "learning_rate": nn_learning_rate,
+            "weight_decay": nn_weight_decay,
+            "width": nn_width,
+            "depth": nn_depth,
+            "device": 'cuda' if torch.cuda.is_available() else 'cpu',
+            "in_features": x.shape[1],
+        }
+        # Log current trial's parameters
+        mlflow.log_params(params)
+
+        mynn = MyNNClassifier(**params)
+        pipeline.steps.append(['classifier', mynn])
+
+        scores = cross_val_score(pipeline, x, y, scoring=scoring, cv=5)
+
+        pipeline.steps.pop()  # Remove the classifier step to avoid affecting subsequent trials
+        
+        # # Log current trial's error metric
+        mlflow.log_metrics({"mean_score": np.mean(scores), "median_score": np.median(scores)})
+
+        # Log the model file
+        mlflow.pytorch.log_model(mynn.model, name="model")
+        # Make it easy to retrieve the best-performing child run later
+        trial.set_user_attr("run_id", child_run.info.run_id)
+
+        #return error
+        return np.min([np.mean(scores), np.median(scores)])
+        
 def run_optuna_study(objective_func, x, y, scoring, run_name, pipeline, n_trials=50):
     # Create a parent run that contains all child runs for different trials
     with mlflow.start_run(run_name=run_name) as run:
@@ -187,9 +226,11 @@ def process_data():
     pipe = Pipeline([('preprocessor', preprocessor)])
     return pipe, X_full, y
 
-
-def main(args=None):
-
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Hyperparameter tuning for LightGBM, CatBoost, HistGradientBoosting, and Neural Network using Optuna and MLflow.")
+    parser.add_argument('--classifier', type=str, required=True, help="Choose the classifier to tune: 'lgbm', 'cb', 'hgb', or 'nn'")
+    args = parser.parse_args()
+    
     # loading variables from .env file
     load_dotenv() 
 
@@ -217,8 +258,11 @@ def main(args=None):
         case 'hgb':
             my_objective = hb_objective
             classifier = "HistGradientBoosting"
+        case 'nn':
+            my_objective = nn_objective
+            classifier = "Neural Network"
         case _:
-            raise ValueError("Invalid classifier choice. Please choose from 'lgbm', 'cb', or 'hgb'.")
+            raise ValueError("Invalid classifier choice. Please choose from 'lgbm', 'cb', 'hgb', or 'nn'.")
     
     run_optuna_study(my_objective, X, y, scoring, run_name=f"{classifier} Hyperparameter Tuning", pipeline=pipe, n_trials=50)
 
@@ -233,10 +277,3 @@ def main(args=None):
     # print("Running HistGradientBoosting hyperparameter tuning...")
     # # Run Optuna study for HistGradientBoosting
     # run_optuna_study(hb_objective, X, y, scoring, run_name="HistGradientBoosting Hyperparameter Tuning", pipeline=pipe, n_trials=50)
-
-
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Hyperparameter tuning for LightGBM, CatBoost, and HistGradientBoosting using Optuna and MLflow.")
-    parser.add_argument('--classifier', type=str, required=True, help="Choose the classifier to tune: 'lgbm', 'cb', or 'hgb'")
-    args = parser.parse_args()
-    main(args)
