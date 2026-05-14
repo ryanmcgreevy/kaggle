@@ -97,7 +97,7 @@ class MyNNClassifier(ClassifierMixin, BaseEstimator):
         self.model = PitNN(in_features, self.width, self.depth).to(device)
 
 
-    def __train__(self, X, y):
+    def _train(self, X, y):
         """A reference implementation of a training function for a classifier.
 
         Parameters
@@ -163,12 +163,12 @@ class MyNNClassifier(ClassifierMixin, BaseEstimator):
         self.X_ = X
         self.y_ = y
 
-        self.__train__(X, y)
+        self._train(X, y)
 
         # Return the classifier
         return self
 
-    def __predict__(self, X, proba=False):
+    def _predict(self, X, proba=False):
         self.model.eval()
         self.model.to('cpu')
         with torch.no_grad():
@@ -200,7 +200,7 @@ class MyNNClassifier(ClassifierMixin, BaseEstimator):
         # `feature_names_in_` but only check that the shape is consistent.
         # X = self._validate_data(X, reset=False)
         
-        y_pred = self.__predict__(X)
+        y_pred = self._predict(X)
         return y_pred
         #closest = np.argmin(euclidean_distances(X, self.X_), axis=1)
         #return self.y_[closest]
@@ -227,7 +227,7 @@ class MyNNClassifier(ClassifierMixin, BaseEstimator):
         # `feature_names_in_` but only check that the shape is consistent.
         # X = self._validate_data(X, reset=False)
         
-        y_pred = self.__predict__(X, proba=True)
+        y_pred = self._predict(X, proba=True)
         return y_pred
         #closest = np.argmin(euclidean_distances(X, self.X_), axis=1)
         #return self.y_[closest]
