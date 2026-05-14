@@ -175,7 +175,7 @@ def process_data():
     X_full = df.drop(columns=['id', 'PitNextLap'])
     te_cols = ['Driver', 'Compound', 'Race', 'Year']
     sc_cols = X_full.drop(columns=te_cols).columns
-    y = df['PitNextLap']
+    y = df['PitNextLap'].to_numpy()
 
     preprocessor = ColumnTransformer(
         transformers=[

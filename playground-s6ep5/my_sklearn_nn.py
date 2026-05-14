@@ -164,7 +164,10 @@ class MyNNClassifier(ClassifierMixin, BaseEstimator):
         self.model.to('cpu')
         with torch.no_grad():
             y_pred = self.model(torch.tensor(X).float().to('cpu'))
-        return y_pred.numpy().flatten() if proba else y_pred.round().numpy().flatten()
+        if proba:
+            return np.hstack((1-y_pred.numpy(), y_pred.numpy()))
+        else:
+            return y_pred.round().numpy().flatten()
 
     def predict(self, X):
         """A reference implementation of a prediction for a classifier.
