@@ -9,17 +9,21 @@ from torch.utils.data import DataLoader, TensorDataset
 
 class PitNN(nn.Module):
     
-    def __init__(self):
+    def __init__(self, in_features, width, depth):
         super(PitNN, self).__init__()
-        self.l1 = nn.Linear(14, 28)
-        self.l2 = nn.Linear(28, 14)
+        self.l1 = nn.Linear(in_features, width)
+        self.lr = nn.Linear(width, width)
+        #self.l2 = nn.Linear(width, in_features)
         self.relu = nn.ReLU()
-        self.lf = nn.Linear(14, 1)
+        self.lf = nn.Linear(width, 1)
         self.sigmoid = nn.Sigmoid()
+        self.depth = depth
     def forward(self, x):
         x = self.relu(self.l1(x))
         # x = self.relu(self.l1(x))
-        x = self.relu(self.l2(x))
+        for i in range(self.depth):
+            x = self.relu(self.lr(x))
+        #x = self.relu(self.l2(x))
         # x = self.relu(self.l1(x))
         # x = self.relu(self.l1(x))
         # x = self.relu(self.l1(x))
@@ -80,8 +84,18 @@ class MyNNClassifier(ClassifierMixin, BaseEstimator):
         "demo_param": [str],
     }
 
-    def __init__(self, demo_param="demo"):
-        self.demo_param = demo_param
+    def __init__(self, in_features, epochs=20, batch_size=256, learning_rate=0.001, weight_decay=0.0001,
+                 width=None, depth=1, device='cpu'):
+        self.in_features = in_features
+        self.epochs = epochs
+        self.batch_size = batch_size
+        self.learning_rate = learning_rate
+        self.weight_decay = weight_decay
+        self.width = width if width is not None else in_features
+        self.depth = depth
+        self.device = device
+        self.model = PitNN(in_features, self.width, self.depth).to(device)
+
 
     def __train__(self, X, y):
         """A reference implementation of a training function for a classifier.
@@ -99,23 +113,18 @@ class MyNNClassifier(ClassifierMixin, BaseEstimator):
         self : object
             Returns self.
         """
-        batch_size = 256
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        self.model = PitNN().to(device)
         loss_fn = nn.BCELoss()  
-        optimizer = torch.optim.Adam(self.model.parameters(), lr=0.001, weight_decay=0.0001)
+        optimizer = torch.optim.Adam(self.model.parameters(), lr=self.learning_rate, weight_decay=self.weight_decay)
         torch.manual_seed(1)
-        num_epochs = 20
-        #y = y.to_numpy().reshape(-1, 1)
         y = y.reshape(-1, 1)
         train_ds = TensorDataset(torch.tensor(X).float(), torch.tensor(y).float())
-        train_dl = DataLoader(train_ds, batch_size=batch_size, shuffle=True)
+        train_dl = DataLoader(train_ds, batch_size=self.batch_size, shuffle=True)
 
-        for epoch in range(num_epochs):
+        for epoch in range(self.epochs):
             self.model.train()
             for x_batch, y_batch in train_dl:
-                pred = self.model(x_batch.to(device))
-                loss = loss_fn(pred, y_batch.to(device))
+                pred = self.model(x_batch.to(self.device))
+                loss = loss_fn(pred, y_batch.to(self.device))
                 loss.backward()
                 optimizer.step()
                 optimizer.zero_grad()
