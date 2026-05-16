@@ -22,7 +22,29 @@ from sklearn.compose import ColumnTransformer
 import argparse
 from my_sklearn_nn import MyNNClassifier
 import torch
+from sklearn.base import BaseEstimator, TransformerMixin
 
+class GroupedMinMaxScaler(BaseEstimator, TransformerMixin):
+    def __init__(self, group_col='Stint', target_col='TyreLife'):
+        self.group_col = group_col
+        self.target_col = target_col
+
+    
+    def fit(self, X, y=None):
+        self.vals = {}
+        for stint, group in X.groupby(self.group_col):
+            self.vals[stint] = (group[self.target_col].min(), group[self.target_col].max())
+        return self
+    
+    def transform(self, X):
+        X = X.copy()
+        # X['Normalized_TyreLife'] = X.groupby(self.group_col)[self.target_col].transform(
+        #     lambda x: (x - x.min()) / (x.max() - x.min())
+        # 
+        for stint, (min_val, max_val) in self.vals.items():
+            mask = X[self.group_col] == stint
+            X.loc[mask, 'Normalized_TyreLife'] = (X.loc[mask, self.target_col] - min_val) / (max_val - min_val)
+        return X
 
 def lgb_objective(trial, x, y, scoring, pipeline):
     # Setting nested=True will create a child run under the parent run.
@@ -209,13 +231,15 @@ def run_optuna_study(objective_func, x, y, scoring, run_name, pipeline, n_trials
         if best_run_id := study.best_trial.user_attrs.get("run_id"):
             mlflow.log_param("best_child_run_id", best_run_id)
 
-def process_data():
+def process_data(normalize_tyre_life=False):
     df = pd.read_csv('./data/train.csv')
     X_full = df.drop(columns=['id', 'PitNextLap'])
     te_cols = ['Driver', 'Compound', 'Race', 'Year']
     sc_cols = X_full.drop(columns=te_cols).columns
     y = df['PitNextLap'].to_numpy()
-
+    # if normalize_tyre_life:
+       # X_full["Normalized_TyreLife"] = X_full.groupby("Stint")["TyreLife"].transform(lambda x: (x - x.min()) / (x.max() - x.min()))
+    
     preprocessor = ColumnTransformer(
         transformers=[
             ('te', TargetEncoder(categories='auto', target_type='binary', smooth='auto', cv=5, random_state=42), te_cols),
@@ -223,7 +247,14 @@ def process_data():
         ]
     )
 
-    pipe = Pipeline([('preprocessor', preprocessor)])
+    if normalize_tyre_life:
+        pipe = Pipeline([
+            ('grouped_min_max_scaler', GroupedMinMaxScaler()),
+            ('preprocessor', preprocessor),
+        ])
+    else:
+        pipe = Pipeline([('preprocessor', preprocessor)])
+
     return pipe, X_full, y
 
 if __name__ == "__main__":
