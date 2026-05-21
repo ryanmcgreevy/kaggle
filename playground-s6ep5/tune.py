@@ -1,6 +1,6 @@
 import pandas as pd
 import numpy as np
-import xgboost as xgb
+#import xgboost as xgb
 from sklearn.utils import resample
 from sklearn.preprocessing import OrdinalEncoder
 import os
@@ -23,6 +23,7 @@ import argparse
 from my_sklearn_nn import MyNNClassifier
 import torch
 from sklearn.base import BaseEstimator, TransformerMixin
+import s3fs
 
 class GroupedMinMaxScaler(BaseEstimator, TransformerMixin):
     def __init__(self, group_col='Stint', target_col='TyreLife'):
@@ -232,7 +233,8 @@ def run_optuna_study(objective_func, x, y, scoring, run_name, pipeline, n_trials
             mlflow.log_param("best_child_run_id", best_run_id)
 
 def process_data(normalize_tyre_life=False):
-    df = pd.read_csv('./data/train.csv')
+    #df = pd.read_csv('./data/train.csv')
+    df = pd.read_csv('s3://jrm-kaggle/playgrounds6ep5/train.csv')
     X_full = df.drop(columns=['id', 'PitNextLap'])
     te_cols = ['Driver', 'Compound', 'Race', 'Year']
     sc_cols = X_full.drop(columns=te_cols).columns
@@ -257,45 +259,47 @@ def process_data(normalize_tyre_life=False):
 
     return pipe, X_full, y
 
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Hyperparameter tuning for LightGBM, CatBoost, HistGradientBoosting, and Neural Network using Optuna and MLflow.")
-    parser.add_argument('--classifier', type=str, required=True, help="Choose the classifier to tune: 'lgbm', 'cb', 'hgb', or 'nn'")
-    args = parser.parse_args()
-    
+
+def main(classifier: str):
     # loading variables from .env file
-    load_dotenv() 
+    load_dotenv()
 
     # Set up MLflow tracking
     mlflow.set_tracking_uri(os.getenv('MLFLOW_SERVER'))
     mlflow.set_experiment("S6E5: Hyperparameter Tuning Experiment")
 
     print("MLflow tracking URI:", mlflow.get_tracking_uri())
-    
-    #read data and define pipeline
+
+    # read data and define pipeline
     pipe, X, y = process_data()
 
     print("Data loaded and pipeline defined. Starting hyperparameter tuning...")
 
     # Define the scoring metric
-    # scoring = make_scorer(roc_auc_score)
     scoring = 'roc_auc'
-    match args.classifier:
+    match classifier:
         case 'lgbm':
             my_objective = lgb_objective
-            classifier = "LightGBM"
+            classifier_name = "LightGBM"
         case 'cb':
             my_objective = cb_objective
-            classifier = "CatBoost"
+            classifier_name = "CatBoost"
         case 'hgb':
             my_objective = hb_objective
-            classifier = "HistGradientBoosting"
+            classifier_name = "HistGradientBoosting"
         case 'nn':
             my_objective = nn_objective
-            classifier = "Neural Network"
+            classifier_name = "Neural Network"
         case _:
             raise ValueError("Invalid classifier choice. Please choose from 'lgbm', 'cb', 'hgb', or 'nn'.")
-    
-    run_optuna_study(my_objective, X, y, scoring, run_name=f"{classifier} Hyperparameter Tuning", pipeline=pipe, n_trials=50)
+
+    run_optuna_study(my_objective, X, y, scoring, run_name=f"{classifier_name} Hyperparameter Tuning", pipeline=pipe, n_trials=50)
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Hyperparameter tuning for LightGBM, CatBoost, HistGradientBoosting, and Neural Network using Optuna and MLflow.")
+    parser.add_argument('--classifier', type=str, required=True, help="Choose the classifier to tune: 'lgbm', 'cb', 'hgb', or 'nn'")
+    args = parser.parse_args()
+    main(args.classifier)
 
     # print("Running lightGBM hyperparameter tuning...")
     # # Run Optuna study for LightGBM
