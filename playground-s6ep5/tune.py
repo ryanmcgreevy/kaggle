@@ -233,8 +233,8 @@ def run_optuna_study(objective_func, x, y, scoring, run_name, pipeline, n_trials
             mlflow.log_param("best_child_run_id", best_run_id)
 
 def process_data(normalize_tyre_life=False):
-    #df = pd.read_csv('./data/train.csv')
-    df = pd.read_csv('s3://jrm-kaggle/playgrounds6ep5/train.csv')
+    df = pd.read_csv('./data/train.csv')
+    #df = pd.read_csv('s3://jrm-kaggle/playgrounds6ep5/train.csv')
     X_full = df.drop(columns=['id', 'PitNextLap'])
     te_cols = ['Driver', 'Compound', 'Race', 'Year']
     sc_cols = X_full.drop(columns=te_cols).columns
