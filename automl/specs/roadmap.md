@@ -14,9 +14,13 @@ This roadmap builds the workflow in small increments. Each phase should leave th
 
 ## Phase 1: Input Data Contract
 
+**Status:** Complete (2026-10-08).
+
 **Deliverable:** A documented run configuration and loader for train CSV, test CSV, optional sample submission, target, and identifier columns.
 
 **Acceptance:** Synthetic fixtures cover valid files, missing files, duplicate columns, train/test column mismatches, and invalid target/ID configuration with actionable errors.
+
+**Verification:** Installed into the project-local `.venv`; `pip check` and all 18 tests passed, covering valid inputs, missing/empty files, duplicate columns, train/test mismatches, target/ID/sample-submission errors, config errors, and input non-mutation. The only new core dependency is `pandas`; no CLI behavior was added.
 
 ## Phase 2: Task and Metric Selection
 
