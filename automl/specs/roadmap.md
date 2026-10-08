@@ -4,9 +4,13 @@ This roadmap builds the workflow in small increments. Each phase should leave th
 
 ## Phase 0: Package and Test Skeleton
 
+**Status:** Complete (2026-10-08).
+
 **Deliverable:** Minimal Python package layout, project metadata, test configuration, and a CLI entry point that prints help.
 
 **Acceptance:** Install the core package in a clean environment, import it, run the CLI help command, and pass the empty/skeleton test suite without optional model or tracking packages.
+
+**Verification:** Installed into the project-local Python 3.12 `.venv`; package import, `automl --help`, `python -m automl --help`, `pip check`, and all 4 tests passed. The initial fresh-environment install downloaded build/test dependencies; subsequent tests and CLI checks run locally without network access.
 
 ## Phase 1: Input Data Contract
 

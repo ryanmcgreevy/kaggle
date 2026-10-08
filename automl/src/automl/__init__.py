@@ -1,0 +1,1 @@
+"""Local-first tools for tabular Kaggle competitions."""
