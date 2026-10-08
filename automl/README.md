@@ -114,3 +114,40 @@ result = load_splits("splits.json")                # result.splits[i].train_idx 
 ```
 
 Artifact (`splits.json`, `schema_version` 1): `strategy`, `seed`, `n_folds`, `holdout_fraction`, `task`, `stratified`, `n_rows`, and `splits`, a list of `{fold, n_train, n_valid, train_idx, valid_idx}`. Holdout has one split (fold 0). `load_splits` rejects malformed files, out-of-range or duplicate indices, train/validation overlap, size mismatches, and k-fold validation sets that do not cover every row exactly once. No CLI command is added in this phase.
+
+## EDA Summary
+
+`summarize` returns a structured, non-mutating `EdaResult`; `save_eda` persists it as JSON for later stages (such as the Phase 5 PDF). The task is never inferred here: pass a `ResolvedTask`, `Task`, or task name to get class or regression target details.
+
+An optional `[eda]` table (config version 1) sets defaults; keyword overrides with the same names take precedence.
+
+```toml
+[eda]
+outlier_method = "both"    # iqr | zscore | both
+iqr_multiplier = 1.5
+zscore_threshold = 3.0
+histogram_bins = 10
+top_n = 10
+id_like_threshold = 0.95
+drift_alpha = 0.05
+```
+
+```python
+from automl import load_config, load_data, resolve_task_metric, summarize_bundle, save_eda, load_eda
+
+cfg = load_config("run.toml")                      # needs [task]; or pass task=..., metric=...
+bundle = load_data(cfg)
+result = summarize_bundle(bundle, task=resolve_task_metric(bundle))
+save_eda(result, "eda.json")                       # refuses to overwrite
+report = load_eda("eda.json")                      # validated plain dict
+# or: summarize(train_df, test_df, target="y", id_columns=("id",), task="binary")
+```
+
+- **dataset:** rows, columns, memory, dtypes, duplicate rows (and duplicate IDs when `id_columns` is set).
+- **columns:** every feature column (target and ID columns excluded) with kind (`numeric`, `boolean`, `categorical`, `other`), nulls, unique count, and flags `constant`, `all_null`, `id_like`. Numeric columns add mean, std (ddof=1), min, 5/25/50/75/95 percentiles, max, skew, a fixed-bin histogram (`edges`, `counts`), and outlier counts; categorical/boolean columns add the top-N values. Non-finite values are excluded from numeric statistics and counted in `non_finite_count`.
+- **outliers:** IQR flags values outside `[Q1 - m*IQR, Q3 + m*IQR]`; z-score flags `|z| > threshold` using ddof=1. A single extreme value can mask itself under z-score, which is why both are reported by default.
+- **id_like:** unique ratio of non-null values at or above `id_like_threshold`, for categorical and integer columns only.
+- **target:** dtype, nulls, unique count; with a task, class counts, fractions, and imbalance ratio (largest over smallest class) or a regression numeric summary. `task` is `null` when none was supplied.
+- **train_test:** row counts, columns present in only one frame, and per common feature column the null-fraction delta, numeric mean shift (train-std units) and std shift, unseen categories, and a KS (numeric) or chi-square (categorical) test with `drift` set when p < `drift_alpha`. Tests that cannot run set `skipped_reason` (constant, id-like, kind mismatch, too few values).
+
+Limits: outlier and drift flags are statistical indicators, not errors or causal conclusions, and with many rows tests flag trivially small shifts. Undefined statistics are `null`; the JSON never contains NaN or infinity. The artifact (`schema_version` 1) has the top-level sections `config`, `dataset`, `columns`, `target`, and `train_test` (`null` when no test frame was given); `load_eda` rejects malformed files. No CLI command is added in this phase.

@@ -27,3 +27,9 @@ class ValidationSplitError(DataContractError):
     """Validation split settings are invalid or incompatible with the target."""
 
     _header = "Validation split problems:"
+
+
+class EdaError(DataContractError):
+    """EDA settings or inputs are invalid."""
+
+    _header = "EDA problems:"

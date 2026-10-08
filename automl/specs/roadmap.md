@@ -50,9 +50,13 @@ Stages should return structured results and persist machine-readable artifacts w
 
 ## Phase 4: EDA Summary
 
+**Status:** Complete (2026-10-08).
+
 **Deliverable:** A reusable, non-mutating EDA stage that summarizes dimensions, dtypes, missingness, duplicates, numeric distributions/outliers, categorical cardinality, target distribution, and train/test differences.
 
 **Acceptance:** Synthetic mixed-type data produces complete structured results, including edge cases such as constant columns, all-null columns, and absent optional targets in test data.
+
+**Verification:** Installed into the project-local `.venv`; `pip check`, CLI help, and all 94 tests passed, covering dataset/column/target/train-test sections, outlier methods against hand-computed values, constant, all-null, and non-finite columns, drift tests, `[eda]` config, JSON-safe output, input non-mutation, and the artifact round trip. `scipy` was declared explicitly (already transitive via scikit-learn); no plotting library or CLI behavior was added.
 
 ## Phase 5: EDA PDF
 

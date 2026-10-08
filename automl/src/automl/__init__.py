@@ -1,7 +1,8 @@
 """Local-first tools for tabular Kaggle competitions."""
 
 from automl.config import DataConfig, load_config
-from automl.errors import DataContractError, TaskMetricError, ValidationSplitError
+from automl.eda import EdaConfig, EdaResult, load_eda, save_eda, summarize, summarize_bundle
+from automl.errors import DataContractError, EdaError, TaskMetricError, ValidationSplitError
 from automl.loader import DataBundle, load_data
 from automl.metrics import Metric, Task, get_metric, list_metrics, register_metric
 from automl.task import (
@@ -18,6 +19,9 @@ __all__ = [
     "DataBundle",
     "DataConfig",
     "DataContractError",
+    "EdaConfig",
+    "EdaError",
+    "EdaResult",
     "Metric",
     "ResolvedTask",
     "Split",
@@ -32,11 +36,15 @@ __all__ = [
     "list_metrics",
     "load_config",
     "load_data",
+    "load_eda",
     "load_splits",
     "make_splits",
     "register_metric",
     "resolve_task_metric",
+    "save_eda",
     "save_splits",
     "suggest_metric",
     "suggest_task",
+    "summarize",
+    "summarize_bundle",
 ]
