@@ -9,11 +9,14 @@ from typing import Any
 
 from automl.errors import DataContractError
 from automl.task import TaskConfig
+from automl.validation import ValidationConfig
 
 CONFIG_VERSION = 1
 _DATA_KEYS = {"train", "test", "sample_submission", "target", "id_columns"}
 _TASK_KEYS = {"task", "metric"}
-_TOP_KEYS = {"version", "seed", "data", "task"}
+_VALIDATION_KEYS = {"strategy", "seed", "n_folds", "holdout_fraction"}
+_VALIDATION_OVERRIDES = {"strategy", "n_folds", "holdout_fraction"}  # 'seed' override stays the run seed
+_TOP_KEYS = {"version", "seed", "data", "task", "validation"}
 
 
 @dataclass(frozen=True)
@@ -25,6 +28,7 @@ class DataConfig:
     id_columns: tuple[str, ...] = ()
     seed: int = 0
     task_config: TaskConfig = field(default_factory=TaskConfig)
+    validation_config: ValidationConfig = field(default_factory=ValidationConfig)
 
     def __post_init__(self) -> None:
         problems: list[str] = []
@@ -94,7 +98,14 @@ def load_config(path: str | Path, **overrides: Any) -> DataConfig:
     for key in _TASK_KEYS & set(task_tbl):
         if not isinstance(task_tbl[key], str):
             problems.append(f"config file {path}: [task] '{key}' must be a string")
-    valid_overrides = {f.name for f in fields(DataConfig)} | _TASK_KEYS
+    val_tbl = raw.get("validation", {})
+    if not isinstance(val_tbl, dict):
+        problems.append(f"config file {path}: [validation] must be a table")
+        val_tbl = {}
+    unknown = set(val_tbl) - _VALIDATION_KEYS
+    if unknown:
+        problems.append(f"config file {path}: unknown keys in [validation]: {sorted(unknown)}")
+    valid_overrides = {f.name for f in fields(DataConfig)} | _TASK_KEYS | _VALIDATION_OVERRIDES
     bad = set(overrides) - valid_overrides
     if bad:
         problems.append(f"unknown config overrides: {sorted(bad)}")
@@ -124,6 +135,13 @@ def load_config(path: str | Path, **overrides: Any) -> DataConfig:
     task_values.update({k: overrides.pop(k) for k in _TASK_KEYS if k in overrides})
     if "task_config" not in overrides:
         values["task_config"] = TaskConfig(**task_values)
+    val_values = {k: v for k, v in val_tbl.items() if k in _VALIDATION_KEYS}
+    val_values.update({k: overrides.pop(k) for k in _VALIDATION_OVERRIDES if k in overrides})
+    if "validation_config" not in overrides:
+        try:
+            values["validation_config"] = ValidationConfig(**val_values)
+        except DataContractError as exc:
+            raise DataContractError([f"config file {path}: {p}" for p in exc.problems]) from None
     values.update(overrides)
     return DataConfig(**values)
 

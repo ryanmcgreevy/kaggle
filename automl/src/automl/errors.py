@@ -21,3 +21,9 @@ class TaskMetricError(DataContractError):
     """Task or metric selection is missing, ambiguous, unsupported, or inconsistent with the data."""
 
     _header = "Task/metric problems:"
+
+
+class ValidationSplitError(DataContractError):
+    """Validation split settings are invalid or incompatible with the target."""
+
+    _header = "Validation split problems:"

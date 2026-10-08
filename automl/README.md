@@ -84,3 +84,33 @@ register_metric("my_metric", lambda y_true, y_pred: ..., ["regression"], "minimi
 ```
 
 Integers with few distinct values are suggested with `ambiguous=True` and are never selected automatically. Custom metrics are registered in Python only and cannot replace built-ins.
+
+## Validation Strategy
+
+An optional `[validation]` table (config version 1) sets how train rows are split. Defaults are shown; keyword overrides `strategy`, `n_folds`, and `holdout_fraction` take precedence (the `seed` keyword remains the run seed; set the split seed in `[validation]` or via `validation_config=`).
+
+```toml
+[validation]
+strategy = "kfold"      # kfold | holdout
+seed = 42
+n_folds = 5
+holdout_fraction = 0.2
+```
+
+- Classification (`binary`, `multiclass`) is stratified; regression uses plain shuffled splits.
+- A class with fewer members than `n_folds` (kfold) or 2 (holdout), null targets, too few rows, or a holdout leaving fewer rows than classes raise `automl.ValidationSplitError`. There is no fallback to non-stratified splitting.
+- Indices are positional rows of `bundle.train`. Splits depend only on the target, task, and config.
+- A fixed seed repeats only for the same scikit-learn version; the saved artifact is the durable record for exact reproduction.
+
+```python
+from automl import load_config, load_data, resolve_task_metric, make_splits, save_splits, load_splits
+
+cfg = load_config("run.toml")                      # needs [task]; or pass task=..., metric=...
+bundle = load_data(cfg)
+resolved = resolve_task_metric(bundle)
+result = make_splits(bundle.train[cfg.target], resolved, cfg.validation_config)
+save_splits(result, "splits.json")                 # refuses to overwrite
+result = load_splits("splits.json")                # result.splits[i].train_idx / valid_idx
+```
+
+Artifact (`splits.json`, `schema_version` 1): `strategy`, `seed`, `n_folds`, `holdout_fraction`, `task`, `stratified`, `n_rows`, and `splits`, a list of `{fold, n_train, n_valid, train_idx, valid_idx}`. Holdout has one split (fold 0). `load_splits` rejects malformed files, out-of-range or duplicate indices, train/validation overlap, size mismatches, and k-fold validation sets that do not cover every row exactly once. No CLI command is added in this phase.

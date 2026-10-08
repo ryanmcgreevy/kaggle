@@ -40,9 +40,13 @@ Stages should return structured results and persist machine-readable artifacts w
 
 ## Phase 3: Validation Strategy
 
+**Status:** Complete (2026-10-08).
+
 **Deliverable:** Reproducible holdout and cross-validation split construction appropriate to the selected task, with configurable seed and fold count.
 
 **Acceptance:** Tests prove repeatable splits for a fixed seed, no train/validation overlap, and valid stratification when class counts permit it; invalid fold/class combinations return a useful error.
+
+**Verification:** Installed into the project-local `.venv`; `pip check` and all 66 tests passed, covering seeded repeatability, no overlap, k-fold partitioning, stratification, holdout size, config/`[validation]` errors, rare-class and null-target errors, and the JSON split artifact round trip. No new dependency; no CLI behavior was added.
 
 ## Phase 4: EDA Summary
 
