@@ -24,9 +24,13 @@ This roadmap builds the workflow in small increments. Each phase should leave th
 
 ## Phase 2: Task and Metric Selection
 
+**Status:** Complete (2026-10-08).
+
 **Deliverable:** Explicit classification/regression task and metric configuration, with safe suggestions where task type or metric is ambiguous.
 
 **Acceptance:** Tests verify supported binary, multiclass, and regression metric/task combinations, and verify that ambiguous or unsupported choices are surfaced instead of silently guessed.
+
+**Verification:** Installed into the project-local `.venv`; `pip check`, CLI help, and all 40 tests passed, covering every built-in task/metric pair, unset/unknown/mismatched choices, target inconsistencies, ambiguous integer targets, custom metrics, and `[task]` TOML parsing. The only new core dependency is `scikit-learn`; no CLI behavior was added.
 
 ## Phase 3: Validation Strategy
 

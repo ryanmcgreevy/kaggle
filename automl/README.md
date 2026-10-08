@@ -54,3 +54,33 @@ bundle.train, bundle.test, bundle.sample_submission
 ```
 
 Invalid inputs raise `automl.DataContractError`, which lists every problem found.
+
+## Task and Metric Selection
+
+An optional `[task]` table (config version 1) sets the task and metric. Neither is ever guessed: when unset, `resolve_task_metric` raises `automl.TaskMetricError` with a suggestion to confirm.
+
+```toml
+[task]
+task = "binary"       # binary | multiclass | regression
+metric = "roc_auc"
+```
+
+| Task | Metrics (default suggestion first) |
+|---|---|
+| binary | `roc_auc`, `log_loss`, `accuracy`, `f1` |
+| multiclass | `log_loss`, `accuracy`, `macro_f1`, `balanced_accuracy` |
+| regression | `rmse`, `mae`, `r2`, `rmsle` (non-negative values only) |
+
+```python
+from automl import (load_config, load_data, resolve_task_metric,
+                    suggest_task, suggest_metric, register_metric)
+
+bundle = load_data(load_config("run.toml"))      # keyword overrides: task=..., metric=...
+suggest_task(bundle.train["y"])                   # Suggestion(value, rationale, evidence, ambiguous)
+resolved = resolve_task_metric(bundle)            # checks task, metric, and target consistency
+resolved.task, resolved.metric.name, resolved.direction
+
+register_metric("my_metric", lambda y_true, y_pred: ..., ["regression"], "minimize")
+```
+
+Integers with few distinct values are suggested with `ambiguous=True` and are never selected automatically. Custom metrics are registered in Python only and cannot replace built-ins.
