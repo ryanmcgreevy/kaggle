@@ -3,15 +3,17 @@
 from __future__ import annotations
 
 import tomllib
-from dataclasses import dataclass, fields
+from dataclasses import dataclass, field, fields
 from pathlib import Path
 from typing import Any
 
 from automl.errors import DataContractError
+from automl.task import TaskConfig
 
 CONFIG_VERSION = 1
 _DATA_KEYS = {"train", "test", "sample_submission", "target", "id_columns"}
-_TOP_KEYS = {"version", "seed", "data"}
+_TASK_KEYS = {"task", "metric"}
+_TOP_KEYS = {"version", "seed", "data", "task"}
 
 
 @dataclass(frozen=True)
@@ -22,6 +24,7 @@ class DataConfig:
     sample_submission_path: Path | None = None
     id_columns: tuple[str, ...] = ()
     seed: int = 0
+    task_config: TaskConfig = field(default_factory=TaskConfig)
 
     def __post_init__(self) -> None:
         problems: list[str] = []
@@ -81,7 +84,17 @@ def load_config(path: str | Path, **overrides: Any) -> DataConfig:
     ids = data.get("id_columns", [])
     if not isinstance(ids, list) or not all(isinstance(c, str) for c in ids):
         problems.append(f"config file {path}: [data] 'id_columns' must be a list of strings")
-    valid_overrides = {f.name for f in fields(DataConfig)}
+    task_tbl = raw.get("task", {})
+    if not isinstance(task_tbl, dict):
+        problems.append(f"config file {path}: [task] must be a table")
+        task_tbl = {}
+    unknown = set(task_tbl) - _TASK_KEYS
+    if unknown:
+        problems.append(f"config file {path}: unknown keys in [task]: {sorted(unknown)}")
+    for key in _TASK_KEYS & set(task_tbl):
+        if not isinstance(task_tbl[key], str):
+            problems.append(f"config file {path}: [task] '{key}' must be a string")
+    valid_overrides = {f.name for f in fields(DataConfig)} | _TASK_KEYS
     bad = set(overrides) - valid_overrides
     if bad:
         problems.append(f"unknown config overrides: {sorted(bad)}")
@@ -107,6 +120,10 @@ def load_config(path: str | Path, **overrides: Any) -> DataConfig:
         values["id_columns"] = tuple(data["id_columns"])
     if "seed" in raw:
         values["seed"] = raw["seed"]
+    task_values = {k: task_tbl[k] for k in _TASK_KEYS if k in task_tbl}
+    task_values.update({k: overrides.pop(k) for k in _TASK_KEYS if k in overrides})
+    if "task_config" not in overrides:
+        values["task_config"] = TaskConfig(**task_values)
     values.update(overrides)
     return DataConfig(**values)
 
