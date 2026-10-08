@@ -2,9 +2,10 @@
 
 from automl.config import DataConfig, load_config
 from automl.eda import EdaConfig, EdaResult, load_eda, save_eda, summarize, summarize_bundle
-from automl.errors import DataContractError, EdaError, TaskMetricError, ValidationSplitError
+from automl.errors import DataContractError, EdaError, ReportError, TaskMetricError, ValidationSplitError
 from automl.loader import DataBundle, load_data
 from automl.metrics import Metric, Task, get_metric, list_metrics, register_metric
+from automl.report import Finding, ReportConfig, ReportResult, build_findings, write_eda_report
 from automl.task import (
     ResolvedTask,
     Suggestion,
@@ -22,7 +23,11 @@ __all__ = [
     "EdaConfig",
     "EdaError",
     "EdaResult",
+    "Finding",
     "Metric",
+    "ReportConfig",
+    "ReportError",
+    "ReportResult",
     "ResolvedTask",
     "Split",
     "SplitResult",
@@ -43,8 +48,10 @@ __all__ = [
     "resolve_task_metric",
     "save_eda",
     "save_splits",
+    "build_findings",
     "suggest_metric",
     "suggest_task",
     "summarize",
     "summarize_bundle",
+    "write_eda_report",
 ]

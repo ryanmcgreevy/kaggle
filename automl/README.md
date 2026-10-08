@@ -151,3 +151,45 @@ report = load_eda("eda.json")                      # validated plain dict
 - **train_test:** row counts, columns present in only one frame, and per common feature column the null-fraction delta, numeric mean shift (train-std units) and std shift, unseen categories, and a KS (numeric) or chi-square (categorical) test with `drift` set when p < `drift_alpha`. Tests that cannot run set `skipped_reason` (constant, id-like, kind mismatch, too few values).
 
 Limits: outlier and drift flags are statistical indicators, not errors or causal conclusions, and with many rows tests flag trivially small shifts. Undefined statistics are `null`; the JSON never contains NaN or infinity. The artifact (`schema_version` 1) has the top-level sections `config`, `dataset`, `columns`, `target`, and `train_test` (`null` when no test frame was given); `load_eda` rejects malformed files. No CLI command is added in this phase.
+
+## EDA PDF
+
+`write_eda_report` builds a PDF and a findings JSON from a stored EDA result (an `EdaResult`, a dict, or the path of a file written by `save_eda`). It never rereads the data and does not need a notebook. Matplotlib is an optional extra; core import and `build_findings` work without it, and a missing install raises `automl.ReportError` with the command below.
+
+```bash
+python -m pip install -e '.[reports]'
+```
+
+An optional `[report]` table (config version 1) sets defaults; keyword overrides with the same names take precedence.
+
+```toml
+[report]
+title = "EDA Report"
+high_missing_fraction = 0.2    # also the train/test null-delta threshold
+outlier_fraction_warn = 0.05
+imbalance_ratio_warn = 10.0
+duplicate_fraction_warn = 0.01
+max_columns_per_chart = 20
+max_histograms = 12            # panels for numeric and categorical charts
+```
+
+```python
+from automl import load_config, load_data, resolve_task_metric, summarize_bundle, save_eda, write_eda_report, build_findings
+
+cfg = load_config("run.toml")                      # needs [task]; or pass task=..., metric=...
+bundle = load_data(cfg)
+save_eda(summarize_bundle(bundle, task=resolve_task_metric(bundle)), "eda.json")
+result = write_eda_report("eda.json", "reports/", config=cfg.report_config)   # overwrite=True to replace
+result.path, result.findings_path, result.pages, result.charts, result.charts_skipped
+build_findings("eda.json")                         # findings only, no matplotlib needed
+```
+
+Files are written only inside the output directory (created if missing): `eda_report.pdf` (or `filename=`) and `<stem>_findings.json`. Existing files are refused unless `overwrite=True`; files are written to temporary names first, so a failure leaves no partial output.
+
+- **Pages:** overview, findings, then the charts that apply. Each chart is skipped, with the reason in `charts_skipped`, when its section is absent.
+- **Charts:** `missingness`, `numeric_histograms` (from stored bins, ranked by outlier fraction), `target_distribution`, `categorical_top_values`, `train_test_drift` (-log10 p against `drift_alpha`), `outlier_fractions`. Bar charts show `max_columns_per_chart` columns and the page states how many were omitted.
+- **Findings** (`warning` or `info`; thresholds are inclusive): `duplicate_rows`, `duplicate_ids`, `class_imbalance`, `all_null`, `constant`, `high_missing`, `id_like` (info), `high_outliers` (info), `one_sided_columns`, `drift`, `unseen_test_categories` (info), `null_delta`. Sorted by severity, scope, column, code.
+
+Findings JSON (`schema_version` 1): `config`, `findings` (each `code`, `severity`, `scope`, `message`, `column`, `value`, `threshold`), `charts`, and `charts_skipped`.
+
+Limits: findings are heuristic flags for review, not causal conclusions or removal advice. Charts show only what the EDA result stored (histogram bins, top-N values, drift results from the Phase 4 settings). No CLI command is added in this phase.
