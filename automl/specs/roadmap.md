@@ -68,55 +68,65 @@ Stages should return structured results and persist machine-readable artifacts w
 
 **Verification:** Installed into the project-local `.venv` with the new optional `reports` extra (`matplotlib`); `pip check`, CLI help, and all 123 tests passed, covering PDF validity and page counts, generation from a saved EDA artifact, skipped charts, finding thresholds and ordering, chart caps, overwrite and atomic-write behavior, a missing-Matplotlib message, core import without Matplotlib, `[report]` config, and input non-mutation. Core dependencies are unchanged; no CLI behavior was added.
 
-## Phase 6: Leakage-Safe Preprocessing
+## Phase 6: Current-Capability CLI and Agent MVP
+
+**Status:** Implemented (2026-10-08); automatic skill discovery remains unverified.
+
+**Deliverable:** A focused CLI over the existing input, task/metric, validation-split, EDA, and EDA-report APIs, plus concise `AGENTS.md` routing and on-demand skills for data intake, splits, and EDA/reporting. The agent interface uses the same CLI/Python API as people; no agent runtime or MCP server is introduced.
+
+**Acceptance:** Synthetic TOML/CSV fixtures exercise `validate`, `split`, `eda`, and `report` through the CLI. Successful commands emit JSON to stdout; workflow errors are actionable on stderr. Split and EDA artifacts refuse overwrite, PDF/findings overwrite requires `--overwrite`, and PDF works only with the optional reports extra. Agent guidance covers explicit task/metric confirmation, local-only handling, artifacts, and validation; skill descriptions support progressive discovery without duplicating workflows in `AGENTS.md`.
+
+**Verification:** From `automl/`, all 128 tests passed, `pip check` passed, and both module and installed CLI help/validation checks passed. Synthetic tests cover all four commands, artifact loading, overwrite rules, and report behavior. Skill frontmatter and folder/name matching passed static checks. The selected skill path is `automl/.agents/skills/`; automatic discovery from the repository-root workspace could not be verified. Do not claim it until checked in VS Code; if not discoverable, revisit location with the user.
+
+## Phase 7: Leakage-Safe Preprocessing
 
 **Deliverable:** Reusable numeric and categorical preprocessing pipelines with configurable imputation and encoding, compatible with scikit-learn CV.
 
 **Acceptance:** Tests cover mixed types and missing values, estimator cloning, and fold-local fitting; validation data cannot influence learned preprocessing statistics.
 
-## Phase 7: Quick Baseline
+## Phase 8: Quick Baseline
 
 **Deliverable:** One fast scikit-learn baseline per supported task type, evaluated with the configured validation strategy and metric.
 
 **Acceptance:** Synthetic classification and regression runs return finite metrics, predictions, effective configuration, and a machine-readable result without optional dependencies.
 
-## Phase 8: Boosting Adapters
+## Phase 9: Boosting Adapters
 
 **Deliverable:** Add supported boosting estimators as optional, individually selectable adapters, beginning with the libraries chosen for the first release.
 
 **Acceptance:** Each installed adapter passes a small fit/predict/metric smoke test; when an adapter dependency is absent, the baseline path still works and the CLI explains how to enable it.
 
-## Phase 9: Optuna Tuning Core
+## Phase 10: Optuna Tuning Core
 
 **Deliverable:** A reusable tuner for one baseline/boosting estimator, with seeded sampler, explicit metric direction, trial/time budget, CV objective, and persisted trial results.
 
 **Acceptance:** A small synthetic study completes within its configured budget, produces repeatable results where estimator behavior permits, and can be inspected or resumed from local study artifacts.
 
-## Phase 10: Model-Family Search Spaces
+## Phase 11: Model-Family Search Spaces
 
 **Deliverable:** Separate, documented Optuna search spaces for each supported estimator; users can choose families and budgets explicitly.
 
 **Acceptance:** Tests verify sampled parameters are valid for the installed estimator and task; failed trials are recorded with a useful reason and do not corrupt successful results.
 
-## Phase 11: Optional MLflow Tracking
+## Phase 12: Optional MLflow Tracking
 
 **Deliverable:** Tracking adapter that mirrors run configuration, metrics, trial history, and complete fitted pipelines to MLflow when explicitly enabled.
 
 **Acceptance:** Local runs still pass with MLflow absent. An integration test against a local MLflow tracking URI verifies a run can be logged and queried; no hosted service is required.
 
-## Phase 12: Best-Model Results PDF
+## Phase 13: Best-Model Results PDF
 
 **Deliverable:** Comparison report for selected best models, including validation metrics, variability, configuration, and relevant diagnostics.
 
 **Acceptance:** A report is generated from saved structured run results, remains accurate after process restart, and clearly distinguishes validation scores from leaderboard claims.
 
-## Phase 13: Refit and Prediction
+## Phase 14: Refit and Prediction
 
 **Deliverable:** Refit the selected pipeline on the declared training data and generate predictions for the test rows.
 
 **Acceptance:** Tests confirm the selected estimator and preprocessing are refit together, prediction count equals test row count, and outputs contain no invalid or non-finite values where the task disallows them.
 
-## Phase 14: Submission Validation and CSV
+## Phase 15: Submission Validation and CSV
 
 **Deliverable:** Build a submission CSV using the sample submission when supplied, preserving required identifiers, column names, and order.
 
@@ -124,25 +134,25 @@ Stages should return structured results and persist machine-readable artifacts w
 
 When identifiers are available, predictions must remain aligned to the corresponding test rows. If sample-submission identifiers differ in order, either explicitly align predictions by identifier or reject the mismatch; matching identifier sets alone is not sufficient.
 
-## Phase 15: End-to-End CLI
+## Phase 16: End-to-End CLI
 
 **Deliverable:** Compose the implemented stages into documented CLI commands for inspection, EDA, baseline, tuning, reporting, and submission generation.
 
 **Acceptance:** A no-network synthetic-data smoke test runs the full local path from CSV inputs to both PDFs and a schema-validated submission; each stage can also be invoked independently.
 
-## Phase 16: Agent Guidance Consolidation
+## Phase 17: Agent Guidance Consolidation
 
-**Deliverable:** Consolidate the per-capability invocation guidance already added with each capability into `automl/AGENTS.md` workflow and safety rules, plus focused `SKILL.md` files for stable capability groups (initially data/EDA, model/tuning, and reporting/submission).
+**Deliverable:** Extend the MVP's `automl/AGENTS.md` router and data/split/EDA skills with full workflow and safety guidance; add focused skills for stable model/tuning and reporting/submission capabilities.
 
 **Acceptance:** Each skill states invocation conditions, inputs, outputs, assumptions, limits, and validation steps; an agent can follow the guidance to compose implemented stages through the documented Python API or CLI without undocumented state or credentials. This phase consolidates and checks guidance; it is not the first point at which capabilities become agent-usable.
 
-## Phase 17: Optional PyTorch Estimator
+## Phase 18: Optional PyTorch Estimator
 
 **Deliverable:** Add a PyTorch-based tabular estimator only after a concrete use case, with scikit-learn-compatible cloning and explicit resource controls.
 
 **Acceptance:** CPU-only synthetic tests verify fit/predict, reproducibility settings, parameter handling, and integration with the existing CV/tuning interfaces. GPU use remains optional.
 
-## Phase 18: Hardening and Documentation
+## Phase 19: Hardening and Documentation
 
 **Deliverable:** User documentation, representative synthetic examples, dependency compatibility checks, and robustness improvements based on real usage.
 

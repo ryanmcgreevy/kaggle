@@ -13,7 +13,7 @@ In scope:
 
 Out of scope:
 
-- CLI command (deferred to Phase 15; the Python API is the interface for now).
+- CLI command (deferred to Phase 16; the Python API is the interface for now).
 - Task/metric selection (Phase 2), splits (Phase 3), EDA (Phase 4), dtype inference or cleaning.
 - Auto-suggesting target or ID columns.
 - Kaggle credentials, downloads, or network access.

@@ -1,6 +1,6 @@
 # AutoML
 
-Local-first tools for tabular Kaggle competitions. The package and CLI are a Phase 0 skeleton; no data inspection, model training, tuning, reporting, or submission commands are implemented yet.
+Local-first tools for tabular Kaggle competitions. The package provides a Python API and an MVP CLI for validating inputs, generating validation splits, and producing EDA artifacts and reports. Modeling, tuning, prediction, and submission commands are future work.
 
 ## Install and Test
 
@@ -18,12 +18,24 @@ python -m pytest
 
 ## CLI
 
-Show the current command-line help:
+The CLI exposes the existing data and EDA capabilities. Successful workflow commands print a JSON result to stdout; workflow errors are printed to stderr and exit with status 1. Input paths in the TOML resolve relative to that file. Output directories are relative to the current working directory and are created when needed.
 
 ```bash
 automl --help
 python -m automl --help
+automl validate run.toml
+automl split run.toml --output-dir runs/experiment-001
+automl eda run.toml --output-dir runs/experiment-001
+automl report run.toml runs/experiment-001/eda.json --output-dir runs/experiment-001/reports
 ```
+
+`validate` checks the TOML, CSV data contract, and explicit task/metric choices. Set both values in `[task]`; the CLI will not silently choose them. `split` writes `splits.json`, and `eda` writes `eda.json`. Both refuse to overwrite existing artifacts. `report` reads the saved EDA artifact and writes a PDF plus findings JSON; it also refuses existing outputs unless `--overwrite` is passed. PDF generation requires the optional reports extra:
+
+```bash
+python -m pip install -e '.[reports]'
+```
+
+The CLI composes the same Python APIs described below. It does not preprocess, train, tune, submit, upload data, or require network access or Kaggle credentials.
 
 ## Input Data Contract
 
@@ -113,7 +125,7 @@ save_splits(result, "splits.json")                 # refuses to overwrite
 result = load_splits("splits.json")                # result.splits[i].train_idx / valid_idx
 ```
 
-Artifact (`splits.json`, `schema_version` 1): `strategy`, `seed`, `n_folds`, `holdout_fraction`, `task`, `stratified`, `n_rows`, and `splits`, a list of `{fold, n_train, n_valid, train_idx, valid_idx}`. Holdout has one split (fold 0). `load_splits` rejects malformed files, out-of-range or duplicate indices, train/validation overlap, size mismatches, and k-fold validation sets that do not cover every row exactly once. No CLI command is added in this phase.
+Artifact (`splits.json`, `schema_version` 1): `strategy`, `seed`, `n_folds`, `holdout_fraction`, `task`, `stratified`, `n_rows`, and `splits`, a list of `{fold, n_train, n_valid, train_idx, valid_idx}`. Holdout has one split (fold 0). `load_splits` rejects malformed files, out-of-range or duplicate indices, train/validation overlap, size mismatches, and k-fold validation sets that do not cover every row exactly once. The `automl split` command uses this same API and artifact contract.
 
 ## EDA Summary
 
@@ -150,7 +162,7 @@ report = load_eda("eda.json")                      # validated plain dict
 - **target:** dtype, nulls, unique count; with a task, class counts, fractions, and imbalance ratio (largest over smallest class) or a regression numeric summary. `task` is `null` when none was supplied.
 - **train_test:** row counts, columns present in only one frame, and per common feature column the null-fraction delta, numeric mean shift (train-std units) and std shift, unseen categories, and a KS (numeric) or chi-square (categorical) test with `drift` set when p < `drift_alpha`. Tests that cannot run set `skipped_reason` (constant, id-like, kind mismatch, too few values).
 
-Limits: outlier and drift flags are statistical indicators, not errors or causal conclusions, and with many rows tests flag trivially small shifts. Undefined statistics are `null`; the JSON never contains NaN or infinity. The artifact (`schema_version` 1) has the top-level sections `config`, `dataset`, `columns`, `target`, and `train_test` (`null` when no test frame was given); `load_eda` rejects malformed files. No CLI command is added in this phase.
+Limits: outlier and drift flags are statistical indicators, not errors or causal conclusions, and with many rows tests flag trivially small shifts. Undefined statistics are `null`; the JSON never contains NaN or infinity. The artifact (`schema_version` 1) has the top-level sections `config`, `dataset`, `columns`, `target`, and `train_test` (`null` when no test frame was given); `load_eda` rejects malformed files. The `automl eda` command writes this artifact using the configured EDA settings and explicitly selected task/metric.
 
 ## EDA PDF
 
@@ -192,4 +204,4 @@ Files are written only inside the output directory (created if missing): `eda_re
 
 Findings JSON (`schema_version` 1): `config`, `findings` (each `code`, `severity`, `scope`, `message`, `column`, `value`, `threshold`), `charts`, and `charts_skipped`.
 
-Limits: findings are heuristic flags for review, not causal conclusions or removal advice. Charts show only what the EDA result stored (histogram bins, top-N values, drift results from the Phase 4 settings). No CLI command is added in this phase.
+Limits: findings are heuristic flags for review, not causal conclusions or removal advice. Charts show only what the EDA result stored (histogram bins, top-N values, drift results from the Phase 4 settings). The `automl report` command reads an EDA JSON artifact and uses `[report]` settings from the supplied TOML file.

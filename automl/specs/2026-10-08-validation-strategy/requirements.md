@@ -16,7 +16,7 @@ In scope:
 
 Out of scope:
 
-- CLI command (deferred to Phase 15; Python API only).
+- CLI command (deferred to Phase 16; Python API only).
 - Repeated k-fold, group k-fold, time-based splits, and binned-target stratification for regression.
 - Fitting models, preprocessing, or scoring (Phases 6+).
 - Splitting the test data.

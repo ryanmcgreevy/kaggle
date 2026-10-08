@@ -79,4 +79,4 @@ The feature is ready to merge when all checks pass on Python 3.12 or newer from 
 - All checks above pass.
 - No Kaggle data, credentials, or generated PDFs are committed.
 - `specs/roadmap.md` marks Phase 5 complete with a verification note.
-- No CLI behavior was added; Phase 15 owns it.
+- No CLI behavior was added; Phase 16 owns full-workflow composition.

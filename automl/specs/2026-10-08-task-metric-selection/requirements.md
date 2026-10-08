@@ -15,7 +15,7 @@ In scope:
 
 Out of scope:
 
-- CLI command (deferred to Phase 15; Python API only).
+- CLI command (deferred to Phase 16; Python API only).
 - Validation splits (Phase 3), EDA (Phase 4), model training or scoring pipelines (Phase 7+).
 - Task types beyond the three above (multilabel, ranking, ordinal).
 - Persisting custom metric callables in config files (callables are registered in Python only).

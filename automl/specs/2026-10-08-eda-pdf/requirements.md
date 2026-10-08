@@ -15,7 +15,7 @@ In scope:
 
 Out of scope:
 
-- CLI command (deferred to Phase 15; Python API only).
+- CLI command (deferred to Phase 16; Python API only).
 - Recomputing EDA or reading raw data frames; the report uses only the stored EDA result.
 - Correlation matrices, feature importance, or model results (Phase 12 owns the model report).
 - Interactive or HTML output, notebook display, or Seaborn.

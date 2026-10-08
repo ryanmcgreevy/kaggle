@@ -18,7 +18,7 @@ In scope:
 Out of scope:
 
 - PDF or chart generation (Phase 5); histograms are stored as data only.
-- CLI command (deferred to Phase 15; Python API only).
+- CLI command (deferred to Phase 16; Python API only).
 - Feature engineering, importance, correlation matrices, or modeling.
 - Automatic task, target, or ID inference (Phase 2 and the data contract own these).
 - Text, image, datetime-specific, or time-series analysis; such columns are reported as kind `other`.
