@@ -9,6 +9,7 @@ from typing import Any
 
 from automl.eda import EDA_KEYS, EdaConfig
 from automl.errors import DataContractError
+from automl.report import REPORT_KEYS, ReportConfig
 from automl.task import TaskConfig
 from automl.validation import ValidationConfig
 
@@ -17,7 +18,7 @@ _DATA_KEYS = {"train", "test", "sample_submission", "target", "id_columns"}
 _TASK_KEYS = {"task", "metric"}
 _VALIDATION_KEYS = {"strategy", "seed", "n_folds", "holdout_fraction"}
 _VALIDATION_OVERRIDES = {"strategy", "n_folds", "holdout_fraction"}  # 'seed' override stays the run seed
-_TOP_KEYS = {"version", "seed", "data", "task", "validation", "eda"}
+_TOP_KEYS = {"version", "seed", "data", "task", "validation", "eda", "report"}
 
 
 @dataclass(frozen=True)
@@ -31,6 +32,7 @@ class DataConfig:
     task_config: TaskConfig = field(default_factory=TaskConfig)
     validation_config: ValidationConfig = field(default_factory=ValidationConfig)
     eda_config: EdaConfig = field(default_factory=EdaConfig)
+    report_config: ReportConfig = field(default_factory=ReportConfig)
 
     def __post_init__(self) -> None:
         problems: list[str] = []
@@ -114,7 +116,16 @@ def load_config(path: str | Path, **overrides: Any) -> DataConfig:
     unknown = set(eda_tbl) - EDA_KEYS
     if unknown:
         problems.append(f"config file {path}: unknown keys in [eda]: {sorted(unknown)}")
-    valid_overrides = {f.name for f in fields(DataConfig)} | _TASK_KEYS | _VALIDATION_OVERRIDES | EDA_KEYS
+    report_tbl = raw.get("report", {})
+    if not isinstance(report_tbl, dict):
+        problems.append(f"config file {path}: [report] must be a table")
+        report_tbl = {}
+    unknown = set(report_tbl) - REPORT_KEYS
+    if unknown:
+        problems.append(f"config file {path}: unknown keys in [report]: {sorted(unknown)}")
+    valid_overrides = (
+        {f.name for f in fields(DataConfig)} | _TASK_KEYS | _VALIDATION_OVERRIDES | EDA_KEYS | REPORT_KEYS
+    )
     bad = set(overrides) - valid_overrides
     if bad:
         problems.append(f"unknown config overrides: {sorted(bad)}")
@@ -156,6 +167,13 @@ def load_config(path: str | Path, **overrides: Any) -> DataConfig:
     if "eda_config" not in overrides:
         try:
             values["eda_config"] = EdaConfig(**eda_values)
+        except DataContractError as exc:
+            raise DataContractError([f"config file {path}: {p}" for p in exc.problems]) from None
+    report_values = {k: v for k, v in report_tbl.items() if k in REPORT_KEYS}
+    report_values.update({k: overrides.pop(k) for k in REPORT_KEYS if k in overrides})
+    if "report_config" not in overrides:
+        try:
+            values["report_config"] = ReportConfig(**report_values)
         except DataContractError as exc:
             raise DataContractError([f"config file {path}: {p}" for p in exc.problems]) from None
     values.update(overrides)

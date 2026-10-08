@@ -60,9 +60,13 @@ Stages should return structured results and persist machine-readable artifacts w
 
 ## Phase 5: EDA PDF
 
+**Status:** Complete (2026-10-08).
+
 **Deliverable:** PDF report generation from the structured EDA results, with charts and concise data-quality findings.
 
 **Acceptance:** A test run produces a non-empty, readable PDF in the requested output directory; report generation does not mutate input data or require a notebook session.
+
+**Verification:** Installed into the project-local `.venv` with the new optional `reports` extra (`matplotlib`); `pip check`, CLI help, and all 123 tests passed, covering PDF validity and page counts, generation from a saved EDA artifact, skipped charts, finding thresholds and ordering, chart caps, overwrite and atomic-write behavior, a missing-Matplotlib message, core import without Matplotlib, `[report]` config, and input non-mutation. Core dependencies are unchanged; no CLI behavior was added.
 
 ## Phase 6: Leakage-Safe Preprocessing
 

@@ -33,3 +33,9 @@ class EdaError(DataContractError):
     """EDA settings or inputs are invalid."""
 
     _header = "EDA problems:"
+
+
+class ReportError(DataContractError):
+    """Report settings, inputs, or output location are invalid."""
+
+    _header = "Report problems:"
