@@ -7,6 +7,7 @@ from dataclasses import dataclass, field, fields
 from pathlib import Path
 from typing import Any
 
+from automl.eda import EDA_KEYS, EdaConfig
 from automl.errors import DataContractError
 from automl.task import TaskConfig
 from automl.validation import ValidationConfig
@@ -16,7 +17,7 @@ _DATA_KEYS = {"train", "test", "sample_submission", "target", "id_columns"}
 _TASK_KEYS = {"task", "metric"}
 _VALIDATION_KEYS = {"strategy", "seed", "n_folds", "holdout_fraction"}
 _VALIDATION_OVERRIDES = {"strategy", "n_folds", "holdout_fraction"}  # 'seed' override stays the run seed
-_TOP_KEYS = {"version", "seed", "data", "task", "validation"}
+_TOP_KEYS = {"version", "seed", "data", "task", "validation", "eda"}
 
 
 @dataclass(frozen=True)
@@ -29,6 +30,7 @@ class DataConfig:
     seed: int = 0
     task_config: TaskConfig = field(default_factory=TaskConfig)
     validation_config: ValidationConfig = field(default_factory=ValidationConfig)
+    eda_config: EdaConfig = field(default_factory=EdaConfig)
 
     def __post_init__(self) -> None:
         problems: list[str] = []
@@ -105,7 +107,14 @@ def load_config(path: str | Path, **overrides: Any) -> DataConfig:
     unknown = set(val_tbl) - _VALIDATION_KEYS
     if unknown:
         problems.append(f"config file {path}: unknown keys in [validation]: {sorted(unknown)}")
-    valid_overrides = {f.name for f in fields(DataConfig)} | _TASK_KEYS | _VALIDATION_OVERRIDES
+    eda_tbl = raw.get("eda", {})
+    if not isinstance(eda_tbl, dict):
+        problems.append(f"config file {path}: [eda] must be a table")
+        eda_tbl = {}
+    unknown = set(eda_tbl) - EDA_KEYS
+    if unknown:
+        problems.append(f"config file {path}: unknown keys in [eda]: {sorted(unknown)}")
+    valid_overrides = {f.name for f in fields(DataConfig)} | _TASK_KEYS | _VALIDATION_OVERRIDES | EDA_KEYS
     bad = set(overrides) - valid_overrides
     if bad:
         problems.append(f"unknown config overrides: {sorted(bad)}")
@@ -140,6 +149,13 @@ def load_config(path: str | Path, **overrides: Any) -> DataConfig:
     if "validation_config" not in overrides:
         try:
             values["validation_config"] = ValidationConfig(**val_values)
+        except DataContractError as exc:
+            raise DataContractError([f"config file {path}: {p}" for p in exc.problems]) from None
+    eda_values = {k: v for k, v in eda_tbl.items() if k in EDA_KEYS}
+    eda_values.update({k: overrides.pop(k) for k in EDA_KEYS if k in overrides})
+    if "eda_config" not in overrides:
+        try:
+            values["eda_config"] = EdaConfig(**eda_values)
         except DataContractError as exc:
             raise DataContractError([f"config file {path}: {p}" for p in exc.problems]) from None
     values.update(overrides)

@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "Local-first tools for tabular Kaggle competitions"
 readme = "README.md"
 requires-python = ">=3.12"
-dependencies = ["pandas>=2.2", "scikit-learn>=1.4"]
+dependencies = ["pandas>=2.2", "scikit-learn>=1.4", "scipy>=1.11"]
 
 [project.optional-dependencies]
 test = ["pytest>=8"]
