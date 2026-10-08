@@ -30,13 +30,14 @@ The default path is CPU-capable and local. PyTorch models, remote execution, GPU
 ## Principles
 
 - **Inspectable by default:** Record data, configuration, assumptions, validation strategy, metrics, and artifact locations for every run.
+- **Composable stage contracts:** Give each capability documented inputs, outputs, assumptions, limits, and machine-readable results where applicable. Later stages should consume documented earlier-stage results rather than depend on hidden process state, so users can inspect decisions and rerun only affected work.
 - **Reproducible:** Use explicit seeds and persist the effective configuration. Report nondeterminism when a library or accelerator prevents exact repeatability.
 - **Leakage-aware:** Fit every learned preprocessing step only on the training fold during cross-validation. Keep validation data out of fitting, target encoding, feature selection, and tuning inputs except through the declared objective.
-- **Human- and agent-usable:** Provide stable, composable Python capabilities and a CLI. Make outputs machine-readable as well as understandable in reports.
+- **Human- and agent-usable:** Provide stable, composable Python capabilities and a CLI. Document how to invoke each capability for both people and agents as it becomes usable; do not defer agent usability until the full workflow is complete. Make outputs machine-readable as well as understandable in reports.
 - **Conservative about inference:** Suggest likely target, ID, task, metric, and split choices, but expose uncertainty and require confirmation for consequential or ambiguous choices.
 - **Local and private by default:** Do not upload competition data, models, or reports to a hosted service unless the user explicitly configures that destination.
 - **Resource-aware:** Allow users to set time, trial, fold, row-sampling, and hardware budgets. Make expensive work opt-in or clearly visible before it begins.
-- **Validated outputs:** Check predictions for row count and valid values; check submission columns, order, and identifiers against the competition's sample submission when available.
+- **Validated outputs:** Check predictions for row count and valid values; preserve row-to-prediction alignment and check submission columns, order, and identifiers against the competition's sample submission when available. Reject or explicitly realign mismatched identifiers rather than relying on set equality when row order matters.
 - **Extensible, not universal:** Prefer reusable mechanisms and explicit extension points over brittle heuristics that claim to solve every dataset automatically.
 
 ## Non-Goals
@@ -51,4 +52,4 @@ The default path is CPU-capable and local. PyTorch models, remote execution, GPU
 
 ## Success Criteria
 
-For a new supported competition, a user can identify or confirm the data contract, run the workflow locally, inspect both PDF reports, compare reproducible validation results, and obtain a submission CSV that passes schema checks. An agent can perform the same work by following repository guidance and invoking documented tools, while surfacing decisions it cannot safely infer.
+For a new supported competition, a user can identify or confirm the data contract, run the workflow locally, inspect both PDF reports, compare reproducible validation results, and obtain a submission CSV that passes schema and row-alignment checks. As each capability is delivered, a person or agent can invoke it from its documented Python API or CLI, inspect its machine-readable results, and rerun it independently; an agent can perform the full workflow by composing those capabilities and surfacing decisions it cannot safely infer.

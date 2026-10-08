@@ -4,7 +4,8 @@
 
 - Prefer well-supported Python data-science libraries and scikit-learn-compatible interfaces.
 - Keep the required installation small enough for local CPU use; model families and tracking backends beyond the baseline are optional dependencies.
-- Use the same importable Python functions from the CLI and from agent-authored workflows. Do not make notebooks the only way to run a stage.
+- Use the same importable Python functions from the CLI and from agent-authored workflows. Document each capability for people and agents when it is introduced; do not make notebooks the only way to run a stage or defer agent guidance until the full workflow exists.
+- Define explicit stage contracts: documented inputs, outputs, assumptions, limits, and validation. Keep later stages able to consume earlier stages' structured results or saved artifacts without hidden in-memory state or rerunning unrelated stages.
 - Keep configuration, metrics, and run metadata in documented, machine-readable artifacts alongside human-readable PDFs.
 - Do not require network access, cloud credentials, or a running tracking server for a local workflow.
 
@@ -24,6 +25,7 @@
 - Use Matplotlib for charts and its PDF support for generating portable EDA and model-results reports. Seaborn may be used for statistical plots where it improves readability.
 - Reports should be generated from structured analysis results, not notebook display state, and should remain useful when optional plotting libraries or model families are absent.
 - Save machine-readable run metadata, metrics, trial history, and selected configuration as JSON or another documented text format. Save model artifacts using the format appropriate to the estimator and document Python/library compatibility constraints.
+- Give persisted stage outputs stable, documented schemas sufficient for downstream stages to use and for people or agents to inspect decisions and rerun only affected work.
 - Write all generated files beneath a user-selected run/output directory. Do not overwrite prior runs implicitly.
 
 ## Interfaces and Configuration
@@ -31,7 +33,7 @@
 - **Python API:** Organize stages as small importable capabilities with explicit inputs and outputs. Keep competition-specific behavior injectable through configuration or adapters.
 - **CLI:** Expose the same stages and end-to-end flow through a documented command-line interface. Use standard-library `argparse` initially unless the implementation demonstrates a need for a CLI framework.
 - **Configuration:** Support command-line options and a versioned configuration file. Prefer TOML for simple project/run configuration because it is supported by the Python standard library; avoid committing competition data, credentials, or local-only paths.
-- **Agent interface:** Add project guidance in `automl/AGENTS.md` and modular instructions in `automl/skills/<skill-name>/SKILL.md`. Skills should describe when to invoke a capability, required inputs, expected artifacts, limits, and checks. Agents use the same CLI/API as humans and may add competition-specific code or skills when the core extension points are insufficient.
+- **Agent interface:** Document invocation guidance alongside each stable capability as it is introduced; later add or update `automl/AGENTS.md` and modular instructions in `automl/skills/<skill-name>/SKILL.md` to consolidate workflow and safety rules. Guidance should describe when to invoke a capability, required inputs, expected results/artifacts, assumptions, limits, and checks. Agents use the same CLI/API as humans and may add competition-specific code or skills when the core extension points are insufficient.
 - **Notebooks:** Use notebooks for exploration or examples when helpful, but not as the sole implementation or source of truth for reusable workflow logic.
 
 ## Quality and Safety
@@ -40,7 +42,7 @@
 - Validate input schemas and user choices at stage boundaries. Provide actionable errors that identify the file, column, or setting involved.
 - Seed supported splitters, Optuna samplers, and estimators from a shared run configuration. Record the seed and any nondeterministic behavior.
 - Keep preprocessing inside CV folds. Use stratified splitters where appropriate for classification and non-stratified splitters for regression unless the data contract specifies otherwise.
-- Validate submission row count and column order against the test data and sample submission when present. Never upload or submit results automatically.
+- Validate submission row count and column order against the test data and sample submission when present. Preserve row-to-prediction alignment: when identifiers are available, align by identifier or reject an order mismatch; set equality alone is insufficient. Never upload or submit results automatically.
 - Keep secrets out of configuration artifacts and logs. Hosted MLflow, SageMaker, and other cloud execution are explicit adapters requiring user setup and consent.
 
 ## Dependency Policy

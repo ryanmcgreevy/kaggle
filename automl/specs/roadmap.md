@@ -2,6 +2,12 @@
 
 This roadmap builds the workflow in small increments. Each phase should leave the project runnable, add a focused acceptance check, and avoid requiring Kaggle data, credentials, network access, cloud services, or a GPU unless that phase explicitly tests an optional integration.
 
+## Cross-Cutting Acceptance
+
+Every phase that introduces or changes a reusable capability must document its invocation and its inputs, outputs, assumptions, limits, and validation checks in the same increment. Keep the Python API usable independently; when a CLI command exists for the capability, document that invocation too. This guidance is for both people and agents and must use the same API/CLI, not an agent-only execution path.
+
+Stages should return structured results and persist machine-readable artifacts when they produce outputs needed by later stages. A later stage must be able to consume the documented result or artifact without relying on hidden in-memory state or rerunning unrelated work. Add focused tests for stage boundaries and artifact contracts as those boundaries are introduced.
+
 ## Phase 0: Package and Test Skeleton
 
 **Status:** Complete (2026-10-08).
@@ -104,17 +110,19 @@ This roadmap builds the workflow in small increments. Each phase should leave th
 
 **Acceptance:** Tests cover schema/order/row-count mismatches, identifier alignment, and valid file writing. The workflow never calls Kaggle submission APIs or overwrites an existing output without explicit instruction.
 
+When identifiers are available, predictions must remain aligned to the corresponding test rows. If sample-submission identifiers differ in order, either explicitly align predictions by identifier or reject the mismatch; matching identifier sets alone is not sufficient.
+
 ## Phase 15: End-to-End CLI
 
 **Deliverable:** Compose the implemented stages into documented CLI commands for inspection, EDA, baseline, tuning, reporting, and submission generation.
 
 **Acceptance:** A no-network synthetic-data smoke test runs the full local path from CSV inputs to both PDFs and a schema-validated submission; each stage can also be invoked independently.
 
-## Phase 16: Agent Guidance
+## Phase 16: Agent Guidance Consolidation
 
-**Deliverable:** Add `automl/AGENTS.md` with workflow and safety rules, plus one focused `SKILL.md` per stable capability (initially data/EDA, model/tuning, and reporting/submission).
+**Deliverable:** Consolidate the per-capability invocation guidance already added with each capability into `automl/AGENTS.md` workflow and safety rules, plus focused `SKILL.md` files for stable capability groups (initially data/EDA, model/tuning, and reporting/submission).
 
-**Acceptance:** Each skill states invocation conditions, inputs, outputs, assumptions, and validation steps; an agent can follow the guidance to run the CLI without undocumented state or credentials.
+**Acceptance:** Each skill states invocation conditions, inputs, outputs, assumptions, limits, and validation steps; an agent can follow the guidance to compose implemented stages through the documented Python API or CLI without undocumented state or credentials. This phase consolidates and checks guidance; it is not the first point at which capabilities become agent-usable.
 
 ## Phase 17: Optional PyTorch Estimator
 
