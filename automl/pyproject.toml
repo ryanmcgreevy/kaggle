@@ -13,6 +13,10 @@ dependencies = ["pandas>=2.2", "scikit-learn>=1.4", "scipy>=1.11"]
 [project.optional-dependencies]
 test = ["pytest>=8"]
 reports = ["matplotlib>=3.8"]
+lightgbm = ["lightgbm>=4.3"]
+xgboost = ["xgboost>=2.0"]
+catboost = ["catboost>=1.2.5"]
+boosting = ["lightgbm>=4.3", "xgboost>=2.0", "catboost>=1.2.5"]
 
 [project.scripts]
 automl = "automl.cli:main"

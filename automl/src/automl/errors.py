@@ -47,6 +47,10 @@ class BaselineError(DataContractError):
     _header = "Baseline problems:"
 
 
+class EstimatorUnavailableError(BaselineError):
+    """A selected estimator's library or device is unavailable."""
+
+
 class ReportError(DataContractError):
     """Report settings, inputs, or output location are invalid."""
 

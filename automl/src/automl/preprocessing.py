@@ -188,8 +188,14 @@ def _target_encoder(target_type: str, seed: int) -> TargetEncoder:
     return TargetEncoder(target_type=target_type, random_state=seed)
 
 
-def build_preprocessor(plan: ColumnPlan, config: PreprocessingConfig, task: Any) -> ColumnTransformer:
-    """Build an unfitted, clonable preprocessor; all learned state is created at `fit` time."""
+def build_preprocessor(
+    plan: ColumnPlan, config: PreprocessingConfig, task: Any, native_categoricals: bool = False
+) -> ColumnTransformer:
+    """Build an unfitted, clonable preprocessor; all learned state is created at `fit` time.
+
+    With `native_categoricals`, categoricals become ordinal codes (missing and unseen stay NaN, no
+    imputation) placed after the numeric block, for estimators with native categorical support.
+    """
     try:
         task = Task(getattr(task, "task", task))
     except ValueError:
@@ -216,6 +222,18 @@ def build_preprocessor(plan: ColumnPlan, config: PreprocessingConfig, task: Any)
             steps.append(("scale", RobustScaler()))
         transformers.append(("num", Pipeline(steps), list(plan.numeric)))
     if plan.categorical:
+        if native_categoricals:
+            steps = [
+                ("to_text", FunctionTransformer(_to_text, feature_names_out="one-to-one")),
+                (
+                    "encode",
+                    OrdinalEncoder(
+                        handle_unknown="use_encoded_value", unknown_value=np.nan, encoded_missing_value=np.nan
+                    ),
+                ),
+            ]
+            transformers.append(("cat", Pipeline(steps), list(plan.categorical)))
+            return ColumnTransformer(transformers, remainder="drop")
         if config.encoder == "onehot":
             encoder: Any = OneHotEncoder(handle_unknown="ignore", sparse_output=False)
         elif config.encoder == "ordinal":
