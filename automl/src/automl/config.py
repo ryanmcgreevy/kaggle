@@ -14,6 +14,7 @@ from automl.model_report import MODEL_REPORT_KEYS, ModelReportConfig
 from automl.preprocessing import PREPROCESSING_KEYS, PreprocessingConfig
 from automl.refit import REFIT_KEYS, RefitConfig
 from automl.report import REPORT_KEYS, ReportConfig
+from automl.submission import SUBMISSION_KEYS, SubmissionConfig
 from automl.task import TaskConfig
 from automl.tracking import TRACKING_KEYS, TrackingConfig
 from automl.tuning import TUNING_KEYS, TuningConfig
@@ -26,8 +27,9 @@ _VALIDATION_KEYS = {"strategy", "seed", "n_folds", "holdout_fraction"}
 _VALIDATION_OVERRIDES = {"strategy", "n_folds", "holdout_fraction"}  # 'seed' override stays the run seed
 _PREPROCESSING_OVERRIDES = PREPROCESSING_KEYS - {"seed"}  # 'seed' override stays the run seed
 _BASELINE_OVERRIDES = BASELINE_KEYS - {"seed"}  # 'seed' override stays the run seed
-_TOP_KEYS = {"version", "seed", "data", "task", "validation", "preprocessing", "baseline", "tuning", "tracking", "eda", "report", "model_report", "refit"}
+_TOP_KEYS = {"version", "seed", "data", "task", "validation", "preprocessing", "baseline", "tuning", "tracking", "eda", "report", "model_report", "refit", "submission"}
 _MODEL_REPORT_OVERRIDES = MODEL_REPORT_KEYS - {"title"} - EDA_KEYS  # shared names keep their other meaning
+_SUBMISSION_OVERRIDES = SUBMISSION_KEYS - REFIT_KEYS  # 'max_reported_rows' override stays with [refit]
 
 
 @dataclass(frozen=True)
@@ -48,6 +50,7 @@ class DataConfig:
     report_config: ReportConfig = field(default_factory=ReportConfig)
     model_report_config: ModelReportConfig = field(default_factory=ModelReportConfig)
     refit_config: RefitConfig = field(default_factory=RefitConfig)
+    submission_config: SubmissionConfig = field(default_factory=SubmissionConfig)
 
     def __post_init__(self) -> None:
         problems: list[str] = []
@@ -180,6 +183,13 @@ def load_config(path: str | Path, **overrides: Any) -> DataConfig:
     unknown = set(refit_tbl) - REFIT_KEYS
     if unknown:
         problems.append(f"config file {path}: unknown keys in [refit]: {sorted(unknown)}")
+    sub_tbl = raw.get("submission", {})
+    if not isinstance(sub_tbl, dict):
+        problems.append(f"config file {path}: [submission] must be a table")
+        sub_tbl = {}
+    unknown = set(sub_tbl) - SUBMISSION_KEYS
+    if unknown:
+        problems.append(f"config file {path}: unknown keys in [submission]: {sorted(unknown)}")
     valid_overrides = (
         {f.name for f in fields(DataConfig)}
         | _TASK_KEYS
@@ -190,6 +200,7 @@ def load_config(path: str | Path, **overrides: Any) -> DataConfig:
         | REPORT_KEYS
         | _MODEL_REPORT_OVERRIDES
         | REFIT_KEYS
+        | _SUBMISSION_OVERRIDES
     )
     bad = set(overrides) - valid_overrides
     if bad:
@@ -277,6 +288,13 @@ def load_config(path: str | Path, **overrides: Any) -> DataConfig:
     if "refit_config" not in overrides:
         try:
             values["refit_config"] = RefitConfig(**refit_values)
+        except DataContractError as exc:
+            raise DataContractError([f"config file {path}: {p}" for p in exc.problems]) from None
+    sub_values = {k: v for k, v in sub_tbl.items() if k in SUBMISSION_KEYS}
+    sub_values.update({k: overrides.pop(k) for k in _SUBMISSION_OVERRIDES if k in overrides})
+    if "submission_config" not in overrides:
+        try:
+            values["submission_config"] = SubmissionConfig(**sub_values)
         except DataContractError as exc:
             raise DataContractError([f"config file {path}: {p}" for p in exc.problems]) from None
     values.update(overrides)
