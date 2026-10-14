@@ -13,6 +13,7 @@ from automl.errors import DataContractError
 from automl.preprocessing import PREPROCESSING_KEYS, PreprocessingConfig
 from automl.report import REPORT_KEYS, ReportConfig
 from automl.task import TaskConfig
+from automl.tuning import TUNING_KEYS, TuningConfig
 from automl.validation import ValidationConfig
 
 CONFIG_VERSION = 1
@@ -22,7 +23,7 @@ _VALIDATION_KEYS = {"strategy", "seed", "n_folds", "holdout_fraction"}
 _VALIDATION_OVERRIDES = {"strategy", "n_folds", "holdout_fraction"}  # 'seed' override stays the run seed
 _PREPROCESSING_OVERRIDES = PREPROCESSING_KEYS - {"seed"}  # 'seed' override stays the run seed
 _BASELINE_OVERRIDES = BASELINE_KEYS - {"seed"}  # 'seed' override stays the run seed
-_TOP_KEYS = {"version", "seed", "data", "task", "validation", "preprocessing", "baseline", "eda", "report"}
+_TOP_KEYS = {"version", "seed", "data", "task", "validation", "preprocessing", "baseline", "tuning", "eda", "report"}
 
 
 @dataclass(frozen=True)
@@ -37,6 +38,7 @@ class DataConfig:
     validation_config: ValidationConfig = field(default_factory=ValidationConfig)
     preprocessing_config: PreprocessingConfig = field(default_factory=PreprocessingConfig)
     baseline_config: BaselineConfig = field(default_factory=BaselineConfig)
+    tuning_config: TuningConfig | None = None
     eda_config: EdaConfig = field(default_factory=EdaConfig)
     report_config: ReportConfig = field(default_factory=ReportConfig)
 
@@ -129,6 +131,13 @@ def load_config(path: str | Path, **overrides: Any) -> DataConfig:
     unknown = set(base_tbl) - BASELINE_KEYS
     if unknown:
         problems.append(f"config file {path}: unknown keys in [baseline]: {sorted(unknown)}")
+    tuning_tbl = raw.get("tuning")
+    if tuning_tbl is not None and not isinstance(tuning_tbl, dict):
+        problems.append(f"config file {path}: [tuning] must be a table")
+        tuning_tbl = None
+    unknown = set(tuning_tbl or {}) - TUNING_KEYS
+    if unknown:
+        problems.append(f"config file {path}: unknown keys in [tuning]: {sorted(unknown)}")
     eda_tbl = raw.get("eda", {})
     if not isinstance(eda_tbl, dict):
         problems.append(f"config file {path}: [eda] must be a table")
@@ -200,6 +209,11 @@ def load_config(path: str | Path, **overrides: Any) -> DataConfig:
     if "baseline_config" not in overrides:
         try:
             values["baseline_config"] = BaselineConfig(**base_values)
+        except DataContractError as exc:
+            raise DataContractError([f"config file {path}: {p}" for p in exc.problems]) from None
+    if tuning_tbl is not None and "tuning_config" not in overrides:
+        try:
+            values["tuning_config"] = TuningConfig(**tuning_tbl)
         except DataContractError as exc:
             raise DataContractError([f"config file {path}: {p}" for p in exc.problems]) from None
     eda_values = {k: v for k, v in eda_tbl.items() if k in EDA_KEYS}

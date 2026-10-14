@@ -11,6 +11,8 @@ from automl.errors import (
     PreprocessingError,
     ReportError,
     TaskMetricError,
+    TuningError,
+    TuningUnavailableError,
     ValidationSplitError,
 )
 from automl.estimators import estimator_available, get_estimator_spec, list_estimators, resolve_device
@@ -34,6 +36,7 @@ from automl.task import (
     suggest_metric,
     suggest_task,
 )
+from automl.tuning import TrialRecord, TuningConfig, TuningResult, load_tuning, resume_tuning, tune
 from automl.validation import Split, SplitResult, ValidationConfig, load_splits, make_splits, save_splits
 
 __all__ = [
@@ -62,6 +65,11 @@ __all__ = [
     "Task",
     "TaskConfig",
     "TaskMetricError",
+    "TrialRecord",
+    "TuningConfig",
+    "TuningError",
+    "TuningResult",
+    "TuningUnavailableError",
     "ValidationConfig",
     "ValidationSplitError",
     "build_preprocessor",
@@ -78,10 +86,12 @@ __all__ = [
     "load_eda",
     "load_plan",
     "load_splits",
+    "load_tuning",
     "make_splits",
     "register_metric",
     "resolve_device",
     "resolve_task_metric",
+    "resume_tuning",
     "run_baseline",
     "save_baseline",
     "save_eda",
@@ -92,5 +102,6 @@ __all__ = [
     "suggest_task",
     "summarize",
     "summarize_bundle",
+    "tune",
     "write_eda_report",
 ]
