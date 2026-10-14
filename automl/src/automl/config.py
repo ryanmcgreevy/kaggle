@@ -7,6 +7,7 @@ from dataclasses import dataclass, field, fields
 from pathlib import Path
 from typing import Any
 
+from automl.baseline import BASELINE_KEYS, BaselineConfig
 from automl.eda import EDA_KEYS, EdaConfig
 from automl.errors import DataContractError
 from automl.preprocessing import PREPROCESSING_KEYS, PreprocessingConfig
@@ -20,7 +21,8 @@ _TASK_KEYS = {"task", "metric"}
 _VALIDATION_KEYS = {"strategy", "seed", "n_folds", "holdout_fraction"}
 _VALIDATION_OVERRIDES = {"strategy", "n_folds", "holdout_fraction"}  # 'seed' override stays the run seed
 _PREPROCESSING_OVERRIDES = PREPROCESSING_KEYS - {"seed"}  # 'seed' override stays the run seed
-_TOP_KEYS = {"version", "seed", "data", "task", "validation", "preprocessing", "eda", "report"}
+_BASELINE_OVERRIDES = BASELINE_KEYS - {"seed"}  # 'seed' override stays the run seed
+_TOP_KEYS = {"version", "seed", "data", "task", "validation", "preprocessing", "baseline", "eda", "report"}
 
 
 @dataclass(frozen=True)
@@ -34,6 +36,7 @@ class DataConfig:
     task_config: TaskConfig = field(default_factory=TaskConfig)
     validation_config: ValidationConfig = field(default_factory=ValidationConfig)
     preprocessing_config: PreprocessingConfig = field(default_factory=PreprocessingConfig)
+    baseline_config: BaselineConfig = field(default_factory=BaselineConfig)
     eda_config: EdaConfig = field(default_factory=EdaConfig)
     report_config: ReportConfig = field(default_factory=ReportConfig)
 
@@ -119,6 +122,13 @@ def load_config(path: str | Path, **overrides: Any) -> DataConfig:
     unknown = set(prep_tbl) - PREPROCESSING_KEYS
     if unknown:
         problems.append(f"config file {path}: unknown keys in [preprocessing]: {sorted(unknown)}")
+    base_tbl = raw.get("baseline", {})
+    if not isinstance(base_tbl, dict):
+        problems.append(f"config file {path}: [baseline] must be a table")
+        base_tbl = {}
+    unknown = set(base_tbl) - BASELINE_KEYS
+    if unknown:
+        problems.append(f"config file {path}: unknown keys in [baseline]: {sorted(unknown)}")
     eda_tbl = raw.get("eda", {})
     if not isinstance(eda_tbl, dict):
         problems.append(f"config file {path}: [eda] must be a table")
@@ -138,6 +148,7 @@ def load_config(path: str | Path, **overrides: Any) -> DataConfig:
         | _TASK_KEYS
         | _VALIDATION_OVERRIDES
         | _PREPROCESSING_OVERRIDES
+        | _BASELINE_OVERRIDES
         | EDA_KEYS
         | REPORT_KEYS
     )
@@ -182,6 +193,13 @@ def load_config(path: str | Path, **overrides: Any) -> DataConfig:
     if "preprocessing_config" not in overrides:
         try:
             values["preprocessing_config"] = PreprocessingConfig(**prep_values)
+        except DataContractError as exc:
+            raise DataContractError([f"config file {path}: {p}" for p in exc.problems]) from None
+    base_values = {k: v for k, v in base_tbl.items() if k in BASELINE_KEYS}
+    base_values.update({k: overrides.pop(k) for k in _BASELINE_OVERRIDES if k in overrides})
+    if "baseline_config" not in overrides:
+        try:
+            values["baseline_config"] = BaselineConfig(**base_values)
         except DataContractError as exc:
             raise DataContractError([f"config file {path}: {p}" for p in exc.problems]) from None
     eda_values = {k: v for k, v in eda_tbl.items() if k in EDA_KEYS}

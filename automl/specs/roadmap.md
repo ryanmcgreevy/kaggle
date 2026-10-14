@@ -90,9 +90,13 @@ Stages should return structured results and persist machine-readable artifacts w
 
 ## Phase 8: Quick Baseline
 
+**Status:** Complete (2026-10-14).
+
 **Deliverable:** One fast scikit-learn baseline per supported task type, evaluated with the configured validation strategy and metric.
 
 **Acceptance:** Synthetic classification and regression runs return finite metrics, predictions, effective configuration, and a machine-readable result without optional dependencies.
+
+**Verification:** Installed into the project-local `.venv`; `pip check`, CLI help, and all tests passed, covering every built-in metric for each task, prediction inputs by metric need, k-fold and holdout out-of-fold coverage, validation-only scoring, leakage and ID/target exclusion, repeatability, `[baseline]` config errors and TOML parsing, class-mismatch and metric-failure errors, and the result directory round trip including reloaded models reproducing saved predictions. No new dependency and no CLI behavior was added.
 
 ## Phase 9: Boosting Adapters
 

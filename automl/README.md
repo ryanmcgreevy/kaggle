@@ -166,6 +166,45 @@ plan, prep_cfg = load_plan("plan.json")
 
 Artifact (`plan.json`, `schema_version` 1): `config` (effective settings), `numeric`, `categorical`, `dropped`, `excluded`, and `reasons` (column to reason). `load_plan` rejects unknown settings, wrong types, and columns listed in more than one group. Fitted preprocessors are not persisted; they live inside fitted pipelines in later phases. No CLI command exists for this phase.
 
+## Quick Baseline
+
+`run_baseline` fits one `HistGradientBoostingClassifier` (binary, multiclass) or `HistGradientBoostingRegressor` (regression) per validation split and scores each fold's validation rows with the resolved metric. An optional `[baseline]` table (config version 1) sets defaults; keyword overrides `n_jobs`, `save_models`, and `estimator_params` take precedence (the `seed` keyword remains the run seed).
+
+```toml
+[baseline]
+seed = 42
+n_jobs = 1           # folds run in parallel; -1 uses all cores
+save_models = true   # write models.joblib
+[baseline.estimator_params]   # overrides for the HistGradientBoosting defaults
+max_iter = 200
+```
+
+- Early stopping is off and `random_state` comes from `seed`, so a fixed seed and splits repeat for the same library versions. `estimator_params` cannot set `random_state`; unknown parameters raise `automl.BaselineError`.
+- Model inputs are the typed numeric and categorical columns only; the target, ID, and dropped columns never reach the model. Preprocessing is fit inside each fold. With `preprocessing_config=None` the encoder is ordinal; pass `cfg.preprocessing_config` to use the run config. Encoded categoricals are treated as numeric.
+- Metrics receive `predict_proba` when `needs="proba"` (positive-class column for binary) and `predict` otherwise. Each classification fold must see the same classes in train and validation rows, otherwise the error names the fold.
+- Out-of-fold predictions: k-fold covers every row once; holdout covers validation rows only. Scores are validation scores under the declared split, not leaderboard claims; `std` is the population standard deviation across folds.
+
+```python
+from automl import (
+    load_config, load_data, resolve_task_metric, make_splits,
+    run_baseline, save_baseline, load_baseline,
+)
+
+cfg = load_config("run.toml")
+bundle = load_data(cfg)
+resolved = resolve_task_metric(bundle)
+splits = make_splits(bundle.train[cfg.target], resolved, cfg.validation_config)   # or load_splits(...)
+result = run_baseline(
+    bundle.train, cfg.target, cfg.id_columns, resolved, splits,
+    cfg.baseline_config, cfg.preprocessing_config,
+)
+print(result.metric, result.direction, result.mean, result.std)
+save_baseline(result, "runs/baseline")             # new directory; refuses to overwrite
+result = load_baseline("runs/baseline")            # load_models=True only for trusted directories
+```
+
+Artifact directory: `baseline.json` (`schema_version` 1: `task`, `metric` name/direction/needs, `estimator` name and effective params, `config`, `preprocessing` (the plan schema above), `split` summary, `prediction_kind`, `n_rows`, per-fold `score`/sizes/timings, `summary` mean and std, library `versions`, and relative `files`), `oof_predictions.csv` (`row` positional index, `fold`, and `prediction` or `proba_<class>` columns), and `models.joblib` (fitted fold pipelines, when `save_models` is true). `load_baseline` rejects malformed files, missing files, inconsistent scores, and out-of-range or duplicate rows. Joblib unpickles on load, so only load `models.joblib` from trusted sources, and expect it to work only with the library versions in `versions`. Set `save_models = false` to skip it. No CLI command exists for this phase.
+
 ## EDA Summary
 
 `summarize` returns a structured, non-mutating `EdaResult`; `save_eda` persists it as JSON for later stages (such as the Phase 5 PDF). The task is never inferred here: pass a `ResolvedTask`, `Task`, or task name to get class or regression target details.
