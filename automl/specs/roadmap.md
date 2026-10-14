@@ -160,11 +160,15 @@ Stages should return structured results and persist machine-readable artifacts w
 
 ## Phase 15: Submission Validation and CSV
 
+**Status:** Complete (2026-10-14).
+
 **Deliverable:** Build a submission CSV using the sample submission when supplied, preserving required identifiers, column names, and order.
 
 **Acceptance:** Tests cover schema/order/row-count mismatches, identifier alignment, and valid file writing. The workflow never calls Kaggle submission APIs or overwrites an existing output without explicit instruction.
 
 When identifiers are available, predictions must remain aligned to the corresponding test rows. If sample-submission identifiers differ in order, either explicitly align predictions by identifier or reject the mismatch; matching identifier sets alone is not sufficient.
+
+**Verification:** With the `reports`, `tuning`, `boosting`, and `mlflow` extras in the project-local `.venv`, `pip check`, CLI help, and all 544 tests passed (1 GPU test skipped). Tests cover binary probability and label samples, multiclass per-class probabilities in sample column order, regression, `LoadedRefit` input, output kept in test order for a reordered sample, rejection of refit predictions out of test order, unmappable and `column_map` schemas, duplicate, null, missing, and extra identifiers, no-id handling with `allow_unverified_ids`, null, infinite, out-of-range, and wrong-count values writing nothing, lossless dtype casts, capped row reporting, the no-sample fallback, the `submission.csv`/`submission.json` round trip with sockets blocked, overwrite refusal and no partial files, saved refit inputs left byte-identical, `[submission]` TOML, MLflow logging to a local SQLite store, MLflow absence raising before any file is written, an unreachable store leaving local files intact, and core import without MLflow, Optuna, or Matplotlib. No new dependency and no CLI behavior was added. The clean-environment run (only the `test` extra) was not repeated. Deviations from the spec: `tracking`, `directory`, and `overwrite` are arguments of `build_submission` (as in `refit_and_predict`) rather than of `save_submission`, and tracking requires a directory; the `load_config` override for `max_reported_rows` stays with `[refit]` because the names collide.
 
 ## Phase 16: End-to-End CLI
 

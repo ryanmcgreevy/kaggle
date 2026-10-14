@@ -11,6 +11,7 @@ from automl.errors import (
     PreprocessingError,
     RefitError,
     ReportError,
+    SubmissionError,
     TaskMetricError,
     TrackingError,
     TrackingUnavailableError,
@@ -61,6 +62,14 @@ from automl.refit import (
     select_pipeline,
 )
 from automl.report import Finding, ReportConfig, ReportResult, build_findings, write_eda_report
+from automl.submission import (
+    LoadedSubmission,
+    SubmissionConfig,
+    SubmissionResult,
+    build_submission,
+    load_submission,
+    save_submission,
+)
 from automl.task import (
     ResolvedTask,
     Suggestion,
@@ -102,6 +111,13 @@ __all__ = [
     "Finding",
     "Metric",
     "LoadedRefit",
+    "LoadedSubmission",
+    "SubmissionConfig",
+    "SubmissionError",
+    "SubmissionResult",
+    "build_submission",
+    "load_submission",
+    "save_submission",
     "ModelData",
     "ModelReportConfig",
     "ModelReportResult",

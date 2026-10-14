@@ -548,6 +548,32 @@ def track_families(
             return TrackingResult(s.shown, cfg.experiment_name, s.experiment_id, run.info.run_id, tuple(child_ids), model_uri, tuple(notes))
 
 
+def track_submission(
+    metadata: dict[str, Any],
+    directory: str | Path,
+    tracking: TrackingConfig,
+) -> TrackingResult:
+    """Log submission.json and submission.csv from a saved submission directory as run artifacts."""
+    _require_mlflow()
+    cfg = tracking
+    out = Path(directory)
+    src = metadata.get("source", {})
+    notes = ["The submission holds raw predictions; nothing was submitted to Kaggle."]
+    with _Session(cfg, out) as s:
+        mlflow = s.mlflow
+        with mlflow.start_run(run_name=cfg.run_name or "submission") as run:
+            _log_params(mlflow, _flatten({"n_rows": metadata["n_rows"], "columns": metadata["columns"], "schema_source": metadata.get("schema_source")}))
+            for name in ("submission.json", "submission.csv"):
+                mlflow.log_artifact(str(out / name))
+            mlflow.set_tags(
+                _tags(
+                    cfg, "submission", {}, notes,
+                    {"automl.source_kind": str(src.get("source_kind")), "automl.label": str(src.get("label"))},
+                )
+            )
+            return TrackingResult(s.shown, cfg.experiment_name, s.experiment_id, run.info.run_id, (), None, tuple(notes))
+
+
 def track_refit(
     pipeline: Pipeline,
     X: pd.DataFrame,

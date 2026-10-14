@@ -533,3 +533,48 @@ Files in the output directory (existing files are refused unless `overwrite=True
 With `tracking=`, the fitted pipeline (cloudpickle), selection parameters, provenance tags, validation mean/std, and `refit.json` are logged as one run (`automl.kind=refit`); raw data and predictions are not. The check for MLflow happens before fitting, and a logging failure raises `TrackingError` after the local files were written.
 
 Limits: one pipeline per call (no ensembling or seed averaging); exact repeatability only on CPU; validation scores in `selection` are optimistic after selection and are not leaderboard estimates; no CLI command exists yet.
+
+## Submission CSV
+
+`build_submission` turns refit predictions into a Kaggle-format CSV and checks it. It takes a `RefitResult` (from `refit_and_predict`) or a `LoadedRefit` (from `load_refit`), the test frame, and optionally the sample submission. It never contacts Kaggle; the file is for manual upload. Needs no optional package; MLflow is used only when `tracking=` is passed.
+
+```toml
+[submission]
+float_format = "%.6f"          # optional CSV float format; default writes round-trippable values
+allow_unverified_ids = false   # true: match rows by position when no id columns are configured
+max_reported_rows = 10         # offending row positions listed per problem (config key only; the load_config override belongs to [refit])
+[submission.column_map]        # optional: sample column = prediction column
+# y = "proba_1"
+```
+
+```python
+from automl import TrackingConfig, build_submission, load_submission
+
+sub = build_submission(
+    result,                      # RefitResult, or load_refit("runs/refit")
+    bundle.test,
+    sample=bundle.sample_submission,
+    sample_name="sample_submission.csv",
+    directory="runs/submission",           # omit to skip writing files
+    tracking=TrackingConfig(),             # optional: log both files to MLflow under runs/submission
+)
+sub.frame                                   # exactly the sample's columns, in test.csv row order
+loaded = load_submission("runs/submission")
+```
+
+`save_submission(sub, directory, overwrite=False)` writes an already built result.
+
+- **Row order:** the submission always follows `test.csv`. The refit prediction identifiers are compared with the test identifiers row by row and any mismatch raises. A sample in a different order is accepted with a note; the output is not reordered to match it.
+- **Identifiers:** nulls, duplicates, differing row counts, and identifier sets that differ between test and sample raise, naming the offending values. Without id columns, rows can only be matched by position, which requires `allow_unverified_ids=true` when a sample is given and is recorded in the notes.
+- **Columns:** with a sample, output columns have exactly the sample's names and order; id columns come from test. One non-id column gets `prediction`, or the positive-class probability for a binary task whose metric needs probabilities. Several non-id columns must be named after the class labels (or `proba_<class>`). Anything else raises and lists the available prediction columns; use `column_map` to choose explicitly.
+- **Values and dtypes:** each column is cast to the sample's dtype class only when lossless (for example integer labels into a float column are fine, 0.7 into an integer column is not). Nulls, NaN, infinity, probabilities outside [0, 1], and row-count mismatches raise `SubmissionError` and nothing is written.
+- **No sample:** the output is the id columns plus the target column holding `prediction`, with a note that the schema is unverified.
+
+Files in the output directory (existing files are refused unless `overwrite=True`; writes are atomic):
+
+- `submission.csv`: header, no index, test row order.
+- `submission.json` (`schema_version` 1): `columns`, `column_mapping` (output column to source), `n_rows`, `id_columns`, `id_check`, `schema_source` (`sample` or `fallback`), `sample_file`, `source` (refit label and path), `config`, `notes`, `files`, and a statement that predictions are not leaderboard estimates.
+
+With `tracking=`, both files are logged as one run (`automl.kind=submission`). A directory is required, the check for MLflow happens before any file is written, and a logging failure raises `TrackingError` after the local files were written.
+
+Limits: Python API only (no CLI yet); no post-processing such as clipping, thresholding, or rounding; one prediction frame per call; the saved `submission.json` names the sample file but does not embed it.

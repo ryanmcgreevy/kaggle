@@ -81,3 +81,9 @@ class RefitError(DataContractError):
     """Refit settings, selection, inputs, predictions, or artifacts are invalid."""
 
     _header = "Refit problems:"
+
+
+class SubmissionError(DataContractError):
+    """Submission settings, inputs, schema, values, or artifacts are invalid."""
+
+    _header = "Submission problems:"
