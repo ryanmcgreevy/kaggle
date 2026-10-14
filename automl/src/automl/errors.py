@@ -35,6 +35,12 @@ class EdaError(DataContractError):
     _header = "EDA problems:"
 
 
+class PreprocessingError(DataContractError):
+    """Preprocessing settings, columns, or plan artifacts are invalid."""
+
+    _header = "Preprocessing problems:"
+
+
 class ReportError(DataContractError):
     """Report settings, inputs, or output location are invalid."""
 
