@@ -5,6 +5,10 @@ description: "Use when creating or checking holdout or k-fold validation splits,
 
 # AutoML Validation Splits
 
+## Use when
+
+Pinning identical folds for every later candidate, or reviewing the validation strategy. Pinning is recommended before `automl-baseline` and `automl-tuning`, so their scores are comparable.
+
 ## Procedure
 
 1. Run the `automl-data-intake` workflow first; task and metric must be explicit and the input data contract must pass.
@@ -13,6 +17,18 @@ description: "Use when creating or checking holdout or k-fold validation splits,
 4. Check the JSON result and load `runs/experiment-001/splits.json` with `automl.load_splits` or inspect its schema. Confirm strategy, task, row count, split count, and artifact path.
 5. If class counts or row counts make the requested split invalid, report the actionable error and ask before changing the validation strategy or parameters.
 
-## Contract
+## Inputs
 
-The command writes the existing version-1 split artifact and refuses to replace `splits.json`. Output paths are relative to the current working directory. Equivalent API functions are `make_splits`, `save_splits`, and `load_splits`. See Validation Strategy in `automl/README.md` for the artifact fields and limitations.
+Run TOML with explicit task and metric, the train CSV, and optional `[validation]` settings (strategy, folds, seed).
+
+## Outputs
+
+`splits.json` (version 1) in `--output-dir`; later stages take it with `--splits`.
+
+## Assumptions and limits
+
+The command refuses to replace `splits.json`. A splits file made for different data (row count or task) is rejected by later stages. Rare classes can make stratified splits invalid; the error says so.
+
+## Check
+
+Exit code 0 and `splits.json` loads with `load_splits`. Equivalent API functions are `make_splits`, `save_splits`, and `load_splits`. See Validation Strategy in `automl/README.md`.
