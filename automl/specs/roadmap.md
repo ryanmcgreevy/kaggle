@@ -100,9 +100,13 @@ Stages should return structured results and persist machine-readable artifacts w
 
 ## Phase 9: Boosting Adapters
 
+**Status:** Complete (2026-10-14).
+
 **Deliverable:** Add supported boosting estimators as optional, individually selectable adapters, beginning with the libraries chosen for the first release.
 
 **Acceptance:** Each installed adapter passes a small fit/predict/metric smoke test; when an adapter dependency is absent, the baseline path still works and the CLI explains how to enable it.
+
+**Verification:** Installed the `boosting` libraries (LightGBM 4.7.0, XGBoost 3.4.1, CatBoost 1.2.10) into the project-local `.venv`; `pip check`, CLI help, and the full suite passed, and the suite was also run in a clean environment with no extras (adapter tests skipped; only the two console-script tests, which need an installed package, were excluded). Tests cover every adapter on binary, multiclass, and regression with string and integer targets, native categoricals with unseen and missing values, parameter control, leakage and ID/target exclusion, CPU repeatability, no files written, library absence with install hints, device fallback and parameter mapping, and artifact schema 2 plus loading schema 1. A real GPU run passed for XGBoost and CatBoost on an NVIDIA RTX 4080; LightGBM's pip build has no OpenCL device so `device="auto"` falls back to CPU. No new core dependency and no CLI behavior was added; the CLI explanation of how to enable an adapter is deferred to Phase 16, and the Python API raises the install hint now.
 
 ## Phase 10: Optuna Tuning Core
 

@@ -16,6 +16,8 @@ Run the test suite:
 python -m pytest
 ```
 
+Optional model libraries are installed with extras (`lightgbm`, `xgboost`, `catboost`, or `boosting` for all); adapter tests are skipped when a library is absent.
+
 ## CLI
 
 The CLI exposes the existing data and EDA capabilities. Successful workflow commands print a JSON result to stdout; workflow errors are printed to stderr and exit with status 1. Input paths in the TOML resolve relative to that file. Output directories are relative to the current working directory and are created when needed.
@@ -203,7 +205,47 @@ save_baseline(result, "runs/baseline")             # new directory; refuses to o
 result = load_baseline("runs/baseline")            # load_models=True only for trusted directories
 ```
 
-Artifact directory: `baseline.json` (`schema_version` 1: `task`, `metric` name/direction/needs, `estimator` name and effective params, `config`, `preprocessing` (the plan schema above), `split` summary, `prediction_kind`, `n_rows`, per-fold `score`/sizes/timings, `summary` mean and std, library `versions`, and relative `files`), `oof_predictions.csv` (`row` positional index, `fold`, and `prediction` or `proba_<class>` columns), and `models.joblib` (fitted fold pipelines, when `save_models` is true). `load_baseline` rejects malformed files, missing files, inconsistent scores, and out-of-range or duplicate rows. Joblib unpickles on load, so only load `models.joblib` from trusted sources, and expect it to work only with the library versions in `versions`. Set `save_models = false` to skip it. No CLI command exists for this phase.
+Artifact directory: `baseline.json` (`schema_version` 2: `task`, `metric` name/direction/needs, `estimator` name, key, and effective params, `categorical_handling`, `device`, `config`, `preprocessing` (the plan schema above), `split` summary, `prediction_kind`, `n_rows`, per-fold `score`/sizes/timings, `summary` mean and std, library `versions`, and relative `files`), `oof_predictions.csv` (`row` positional index, `fold`, and `prediction` or `proba_<class>` columns), and `models.joblib` (fitted fold pipelines, when `save_models` is true). `load_baseline` rejects malformed files, missing files, inconsistent scores, and out-of-range or duplicate rows. Joblib unpickles on load, so only load `models.joblib` from trusted sources, and expect it to work only with the library versions in `versions`. Set `save_models = false` to skip it. `load_baseline` also reads `schema_version` 1 directories. No CLI command exists for this phase.
+
+## Boosting Adapters
+
+The `estimator` key in `[baseline]` selects one estimator per run. LightGBM, XGBoost, and CatBoost are optional; the core install and the default `hist_gradient_boosting` need none of them. Nothing imports an adapter library until it is selected.
+
+| `estimator` | Install | Native categoricals (default) | GPU |
+|---|---|---|---|
+| `hist_gradient_boosting` | core | supported (off) | no |
+| `lightgbm` | `pip install 'automl[lightgbm]'` | on | OpenCL build only |
+| `xgboost` | `pip install 'automl[xgboost]'` | on | CUDA |
+| `catboost` | `pip install 'automl[catboost]'` | on | CUDA |
+
+`pip install 'automl[boosting]'` installs all three. Selecting a library that is not installed raises `automl.EstimatorUnavailableError` before any fitting, naming the package and the install command.
+
+```toml
+[baseline]
+estimator = "lightgbm"          # hist_gradient_boosting | lightgbm | xgboost | catboost
+native_categoricals = true      # omit for the estimator's default
+device = "cpu"                  # cpu | auto | gpu
+[baseline.estimator_params]
+n_estimators = 300
+```
+
+- Defaults: seeded from `seed`, CPU, early stopping off, 100 trees/iterations, library logging silenced, and no files written (CatBoost `allow_writing_files=False`). `n_jobs` is the library's thread count; for adapters folds run sequentially, while `hist_gradient_boosting` still runs folds in parallel.
+- `estimator_params` cannot set seed, thread count, device, verbosity, early stopping, or categorical parameters; the error names the setting to use instead. Unknown parameters raise `BaselineError`.
+- All adapters accept string and integer targets and return probabilities in `classes_` order.
+- Native categoricals: the transformed matrix is the numeric block followed by the categorical block, which is ordinal codes fit on the train fold; missing and unseen categories stay missing (no imputation). The preprocessing `encoder` setting is ignored and `categorical_handling` is recorded as `"native"`. Set `native_categoricals = false` for the encoded path. CatBoost receives its categorical columns as strings, with missing as `"nan"`. HistGradientBoosting requires at most 255 categories per column in this mode.
+- Device: `auto` uses the GPU only if the library supports it and a tiny probe fit succeeds, otherwise it falls back to CPU and records why; `gpu` raises `EstimatorUnavailableError` instead of falling back. The result's `device` records requested, effective, reason, and a reproducibility note: GPU training is not guaranteed to be bit-reproducible, while CPU runs repeat for a fixed seed, splits, and library versions.
+
+```python
+from automl import BaselineConfig, list_estimators, estimator_available, run_baseline
+
+list_estimators()                       # ['hist_gradient_boosting', 'lightgbm', 'xgboost', 'catboost']
+estimator_available("lightgbm")          # True when the package is installed
+cfg = BaselineConfig(estimator="lightgbm", device="auto", estimator_params={"n_estimators": 300})
+result = run_baseline(bundle.train, target, id_columns, resolved, splits, cfg)
+result.estimator_key, result.categorical_handling, result.device
+```
+
+Artifact `schema_version` 2 adds `estimator.key`, `categorical_handling`, and `device`, and records the library version under `versions`. No CLI command exists for this phase.
 
 ## EDA Summary
 

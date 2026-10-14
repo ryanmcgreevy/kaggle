@@ -7,11 +7,13 @@ from automl.errors import (
     BaselineError,
     DataContractError,
     EdaError,
+    EstimatorUnavailableError,
     PreprocessingError,
     ReportError,
     TaskMetricError,
     ValidationSplitError,
 )
+from automl.estimators import estimator_available, get_estimator_spec, list_estimators, resolve_device
 from automl.loader import DataBundle, load_data
 from automl.metrics import Metric, Task, get_metric, list_metrics, register_metric
 from automl.preprocessing import (
@@ -45,6 +47,7 @@ __all__ = [
     "EdaConfig",
     "EdaError",
     "EdaResult",
+    "EstimatorUnavailableError",
     "Finding",
     "Metric",
     "PreprocessingConfig",
@@ -62,9 +65,12 @@ __all__ = [
     "ValidationConfig",
     "ValidationSplitError",
     "build_preprocessor",
+    "estimator_available",
     "fit_transform_fold",
+    "get_estimator_spec",
     "get_metric",
     "infer_columns",
+    "list_estimators",
     "list_metrics",
     "load_baseline",
     "load_config",
@@ -74,6 +80,7 @@ __all__ = [
     "load_splits",
     "make_splits",
     "register_metric",
+    "resolve_device",
     "resolve_task_metric",
     "run_baseline",
     "save_baseline",

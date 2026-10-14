@@ -1,4 +1,4 @@
-"""Quick HistGradientBoosting baseline evaluated with the configured validation splits."""
+"""Quick baseline with a selectable boosting estimator, evaluated with the configured validation splits."""
 
 from __future__ import annotations
 
@@ -16,10 +16,18 @@ import pandas as pd
 import sklearn
 from joblib import Parallel, delayed
 from sklearn.base import clone
-from sklearn.ensemble import HistGradientBoostingClassifier, HistGradientBoostingRegressor
 from sklearn.pipeline import Pipeline
 
 from automl.errors import BaselineError, TaskMetricError
+from automl.estimators import (
+    DEVICES,
+    ESTIMATOR_NAMES,
+    FeatureLayout,
+    controlled_param_problems,
+    describe_estimator,
+    get_estimator_spec,
+    resolve_device,
+)
 from automl.metrics import Task
 from automl.preprocessing import (
     ColumnPlan,
@@ -31,7 +39,9 @@ from automl.preprocessing import (
 )
 from automl.validation import SplitResult
 
-ARTIFACT_VERSION = 1
+ARTIFACT_VERSION = 2
+READABLE_VERSIONS = (1, 2)
+DEFAULT_ESTIMATOR = "hist_gradient_boosting"
 RESULT_FILE = "baseline.json"
 OOF_FILE = "oof_predictions.csv"
 MODELS_FILE = "models.joblib"
@@ -43,6 +53,9 @@ class BaselineConfig:
     n_jobs: int = 1
     save_models: bool = True
     estimator_params: dict[str, Any] = field(default_factory=dict)
+    estimator: str = DEFAULT_ESTIMATOR
+    native_categoricals: bool | None = None
+    device: str = "cpu"
 
     def __post_init__(self) -> None:
         problems: list[str] = []
@@ -56,8 +69,16 @@ class BaselineConfig:
         params = self.estimator_params
         if not isinstance(params, dict) or not all(isinstance(k, str) for k in params):
             problems.append("setting 'estimator_params' must be a table of parameter names to values")
-        elif "random_state" in params:
-            problems.append("setting 'estimator_params' cannot set 'random_state'; use the 'seed' setting")
+        else:
+            problems.extend(controlled_param_problems(params))
+        if self.estimator not in ESTIMATOR_NAMES:
+            problems.append(
+                f"setting 'estimator' has unsupported value {self.estimator!r}; valid: {list(ESTIMATOR_NAMES)}"
+            )
+        if self.native_categoricals is not None and not isinstance(self.native_categoricals, bool):
+            problems.append("setting 'native_categoricals' must be true or false")
+        if self.device not in DEVICES:
+            problems.append(f"setting 'device' has unsupported value {self.device!r}; valid: {list(DEVICES)}")
         if problems:
             raise BaselineError(problems)
         object.__setattr__(self, "estimator_params", dict(params))
@@ -96,28 +117,31 @@ class BaselineResult:
     oof: pd.DataFrame
     models: tuple[Any, ...] = ()
     versions: dict[str, str] = field(default_factory=dict)
+    estimator_key: str = DEFAULT_ESTIMATOR
+    categorical_handling: str = "encoded"
+    device: dict[str, Any] = field(default_factory=dict)
 
 
-def make_estimator(task: Any, config: BaselineConfig | None = None) -> Any:
-    """Return an unfitted HistGradientBoosting estimator for the task, seeded, early stopping off."""
+def make_estimator(
+    task: Any, config: BaselineConfig | None = None, layout: FeatureLayout | None = None, device: str = "cpu"
+) -> Any:
+    """Return the unfitted estimator selected by `config.estimator`, seeded, with early stopping off."""
     cfg = config or BaselineConfig()
     task = Task(getattr(task, "task", task))
-    cls = HistGradientBoostingRegressor if task is Task.REGRESSION else HistGradientBoostingClassifier
-    unknown = sorted(set(cfg.estimator_params) - set(cls().get_params()))
-    if unknown:
-        raise BaselineError(
-            f"setting 'estimator_params' has parameters {unknown} that {cls.__name__} does not accept"
-        )
-    return cls(**{"early_stopping": False, **cfg.estimator_params, "random_state": cfg.seed})
+    spec = get_estimator_spec(cfg.estimator)
+    return spec.make(task, cfg.estimator_params, cfg.seed, cfg.n_jobs, device, layout or FeatureLayout(0, 0))
 
 
-def _versions() -> dict[str, str]:
-    return {
+def _versions(package_version: tuple[str, str | None] | None = None) -> dict[str, str]:
+    versions = {
         "python": platform.python_version(),
         "scikit-learn": sklearn.__version__,
         "pandas": pd.__version__,
         "numpy": np.__version__,
     }
+    if package_version and package_version[1]:
+        versions[package_version[0]] = package_version[1]
+    return versions
 
 
 def _prediction_kind(task: Task, needs: str) -> str:
@@ -128,7 +152,7 @@ def _prediction_kind(task: Task, needs: str) -> str:
     return "proba" if task is Task.MULTICLASS else "proba_positive"
 
 
-def _run_fold(pipeline, X, y, split, task, metric, needs):
+def _run_fold(pipeline, X, y, split, task, metric, needs, fit_params):
     name = f"fold {split.fold}"
     X_tr, y_tr = X.iloc[split.train_idx], y.iloc[split.train_idx]
     X_va, y_va = X.iloc[split.valid_idx], y.iloc[split.valid_idx]
@@ -141,7 +165,7 @@ def _run_fold(pipeline, X, y, split, task, metric, needs):
             )
     model = clone(pipeline)
     t0 = time.perf_counter()
-    model.fit(X_tr, y_tr)
+    model.fit(X_tr, y_tr, **fit_params)
     fit_s = time.perf_counter() - t0
     t0 = time.perf_counter()
     if needs == "proba":
@@ -173,9 +197,10 @@ def run_baseline(
     config: BaselineConfig | None = None,
     preprocessing_config: PreprocessingConfig | None = None,
 ) -> BaselineResult:
-    """Fit one HistGradientBoosting pipeline per split and score validation rows with the resolved metric.
+    """Fit one pipeline per split with the selected estimator and score validation rows with the resolved metric.
 
-    Preprocessing is fit inside each fold. `preprocessing_config=None` uses ordinal encoding.
+    Preprocessing is fit inside each fold. `preprocessing_config=None` uses ordinal encoding, which
+    native categorical handling (the default for LightGBM, XGBoost, and CatBoost) replaces.
     """
     cfg = config or BaselineConfig()
     prep_cfg = preprocessing_config or PreprocessingConfig(encoder="ordinal", seed=cfg.seed)
@@ -190,14 +215,26 @@ def run_baseline(
     if problems:
         raise BaselineError(problems)
 
+    spec = get_estimator_spec(cfg.estimator)
+    spec.require()
+    native = spec.native_default if cfg.native_categoricals is None else cfg.native_categoricals
+    if native and not spec.supports_native_categoricals:
+        raise BaselineError(f"setting 'native_categoricals' is true but '{spec.name}' has no native categorical support")
+    choice = resolve_device(spec, cfg.device)
+
     plan = infer_columns(train, target, id_columns, prep_cfg)
-    estimator = make_estimator(task, cfg)
-    pipeline = Pipeline([("pre", build_preprocessor(plan, prep_cfg, task)), ("model", estimator)])
+    layout = FeatureLayout(len(plan.numeric), len(plan.categorical), native)
+    estimator = make_estimator(task, cfg, layout, choice.effective)
+    pre = build_preprocessor(plan, prep_cfg, task, native_categoricals=native)
+    pipeline = Pipeline([("pre", pre), ("model", estimator)])
+    fit_params = {f"model__{k}": v for k, v in spec.fit_params(layout).items()}
     y = train[target]
     X = train[[*plan.numeric, *plan.categorical]]  # model inputs exclude target, ids, and dropped columns
     needs = metric.needs
-    results = Parallel(n_jobs=cfg.n_jobs)(
-        delayed(_run_fold)(pipeline, X, y, s, task, metric, needs) for s in splits.splits
+    # Boosting libraries use n_jobs as their own thread count, so only the scikit-learn baseline parallelizes folds.
+    fold_jobs = cfg.n_jobs if spec.package is None else 1
+    results = Parallel(n_jobs=fold_jobs)(
+        delayed(_run_fold)(pipeline, X, y, s, task, metric, needs, fit_params) for s in splits.splits
     )
 
     kind = _prediction_kind(task, needs)
@@ -215,13 +252,14 @@ def run_baseline(
     folds = tuple(r[3] for r in results)
     scores = np.array([f.score for f in folds])
     sc = splits.config
+    est_name, est_params = describe_estimator(estimator)
     return BaselineResult(
         task=task,
         metric=metric.name,
         direction=metric.direction,
         needs=needs,
-        estimator=type(estimator).__name__,
-        estimator_params=_plain(estimator.get_params()),
+        estimator=est_name,
+        estimator_params=_plain(est_params),
         config=cfg,
         preprocessing_config=prep_cfg,
         plan=plan,
@@ -239,7 +277,15 @@ def run_baseline(
         n_rows=len(train),
         oof=oof,
         models=tuple(r[0] for r in results),
-        versions=_versions(),
+        versions=_versions((spec.package, spec.version()) if spec.package else None),
+        estimator_key=spec.name,
+        categorical_handling="native" if native else "encoded",
+        device={
+            "requested": choice.requested,
+            "effective": choice.effective,
+            "reason": choice.reason,
+            "note": "GPU training is not guaranteed to be bit-reproducible" if choice.effective == "gpu" else None,
+        },
     )
 
 
@@ -261,12 +307,17 @@ def save_baseline(result: BaselineResult, directory: str | Path) -> None:
         "schema_version": ARTIFACT_VERSION,
         "task": result.task.value,
         "metric": {"name": result.metric, "direction": result.direction, "needs": result.needs},
-        "estimator": {"name": result.estimator, "params": result.estimator_params},
+        "estimator": {"name": result.estimator, "key": result.estimator_key, "params": result.estimator_params},
+        "categorical_handling": result.categorical_handling,
+        "device": result.device,
         "config": {
             "seed": result.config.seed,
             "n_jobs": result.config.n_jobs,
             "save_models": result.config.save_models,
             "estimator_params": result.config.estimator_params,
+            "estimator": result.config.estimator,
+            "native_categoricals": result.config.native_categoricals,
+            "device": result.config.device,
         },
         "preprocessing": plan_to_dict(result.plan, result.preprocessing_config),
         "split": result.split,
@@ -308,8 +359,8 @@ def load_baseline(directory: str | Path, load_models: bool = False) -> BaselineR
         raise bad(f"{RESULT_FILE} not found") from None
     except json.JSONDecodeError as exc:
         raise bad(f"{RESULT_FILE} is not valid JSON: {exc}") from None
-    if not isinstance(raw, dict) or raw.get("schema_version") != ARTIFACT_VERSION:
-        raise bad(f"unsupported or missing 'schema_version'; expected {ARTIFACT_VERSION}")
+    if not isinstance(raw, dict) or raw.get("schema_version") not in READABLE_VERSIONS:
+        raise bad(f"unsupported or missing 'schema_version'; expected one of {list(READABLE_VERSIONS)}")
     try:
         task = Task(raw["task"])
         metric, estimator, cfg_raw = raw["metric"], raw["estimator"], raw["config"]
@@ -320,7 +371,9 @@ def load_baseline(directory: str | Path, load_models: bool = False) -> BaselineR
         folds = tuple(FoldRecord(**f) for f in folds_raw)
         plan, prep_cfg = plan_from_dict(raw["preprocessing"], f"{label} preprocessing")
         result_fields = (metric["name"], metric["direction"], metric["needs"], estimator["name"], estimator["params"])
-    except (KeyError, TypeError, ValueError) as exc:
+        estimator_key = estimator.get("key", DEFAULT_ESTIMATOR)
+        handling, device = raw.get("categorical_handling", "encoded"), raw.get("device", {})
+    except (KeyError, TypeError, ValueError, AttributeError) as exc:
         raise bad(f"missing or invalid field ({exc})") from None
     if isinstance(n_rows, bool) or not isinstance(n_rows, int) or not folds:
         raise bad("'n_rows' must be an integer and 'folds' must not be empty")
@@ -366,4 +419,7 @@ def load_baseline(directory: str | Path, load_models: bool = False) -> BaselineR
         oof=oof,
         models=models,
         versions=versions,
+        estimator_key=estimator_key,
+        categorical_handling=handling,
+        device=device,
     )
