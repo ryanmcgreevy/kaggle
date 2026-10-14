@@ -150,9 +150,13 @@ Stages should return structured results and persist machine-readable artifacts w
 
 ## Phase 14: Refit and Prediction
 
+**Status:** Complete (2026-10-14).
+
 **Deliverable:** Refit the selected pipeline on the declared training data and generate predictions for the test rows.
 
 **Acceptance:** Tests confirm the selected estimator and preprocessing are refit together, prediction count equals test row count, and outputs contain no invalid or non-finite values where the task disallows them.
+
+**Verification:** With the `reports`, `tuning`, `boosting`, and `mlflow` extras in the project-local `.venv`, `pip check`, CLI help, and all 518 tests passed (1 GPU test skipped); in a clean environment with only the `test` extra, 370 passed and 101 skipped. Tests cover baseline, tuning, and families sources and explicit selection, rank and label choices, one `Pipeline` equal to a manual train-only fit, test rows not changing fitted preprocessing, binary/multiclass/regression predictions for HGB and each boosting adapter, string and integer labels, unseen categories, missing and extra columns, each validity rule with capped row reporting, the `predictions.csv`/`refit.json`/`pipeline.joblib` round trip and restart reproduction, metadata loading with boosting libraries blocked, overwrite and atomic-write behavior, `[refit]` TOML, MLflow logging to a local SQLite store with the model reloading and matching predictions, an unreachable store leaving local files intact, and core import without MLflow, Optuna, or Matplotlib. The README example ran end to end on synthetic CSVs. No new dependency and no CLI behavior was added; the GPU check was not run. Deviations from the spec: with several candidates and no `label` or `rank`, rank 1 is used with a recorded note instead of raising; the default `proba_tolerance` is `1e-5` (float32 boosting probabilities can miss `1e-6`); `Candidate` gained an internal `build` field and `build_pipeline` lives in `refit.py` (with `tracking._fit_pipeline` now calling it) rather than in a new shared module; `refit_and_predict` takes `train`, `test`, `target`, `id_columns`, and `resolved_task` like the other stages and returns a `RefitResult`.
 
 ## Phase 15: Submission Validation and CSV
 

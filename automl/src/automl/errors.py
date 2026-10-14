@@ -75,3 +75,9 @@ class ReportError(DataContractError):
     """Report settings, inputs, or output location are invalid."""
 
     _header = "Report problems:"
+
+
+class RefitError(DataContractError):
+    """Refit settings, selection, inputs, predictions, or artifacts are invalid."""
+
+    _header = "Refit problems:"

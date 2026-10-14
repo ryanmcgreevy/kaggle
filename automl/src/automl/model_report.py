@@ -81,6 +81,7 @@ class Candidate:
     prediction_kind: str | None = None
     trials: tuple[TrialRecord, ...] = field(default=(), repr=False)
     oof: Any = field(default=None, repr=False)
+    build: dict[str, Any] = field(default_factory=dict, repr=False)  # what refit needs to rebuild the pipeline
 
     def to_dict(self) -> dict[str, Any]:
         scores = self.fold_scores
@@ -221,6 +222,18 @@ def _from_baseline(res: BaselineResult, path: str) -> Candidate:
         has_oof=res.oof is not None and len(res.oof) > 0,
         prediction_kind=res.prediction_kind,
         oof=res.oof,
+        build={
+            "estimator_params": _plain(res.config.estimator_params),
+            "seed": res.config.seed,
+            "n_jobs": res.config.n_jobs,
+            "device": res.config.device,
+            "native_categoricals": res.categorical_handling == "native",
+            "preprocessing": _plain(asdict(res.preprocessing_config)),
+            "features": [*res.plan.numeric, *res.plan.categorical],
+            "task": res.task.value,
+            "metric": res.metric,
+            "direction": res.direction,
+        },
     )
 
 
@@ -256,6 +269,18 @@ def _from_tuning(res: TuningResult, path: str, label: str, kind: str) -> Candida
         },
         versions=dict(res.versions),
         trials=tuple(res.trials),
+        build={
+            "estimator_params": _plain({**fp.get("estimator_params", {}), **best.params}),
+            "seed": res.config.seed,
+            "n_jobs": res.config.n_jobs,
+            "device": res.config.device,
+            "native_categoricals": bool(fp.get("native_categoricals")),
+            "preprocessing": _plain(fp.get("preprocessing", {})),
+            "features": list(fp.get("features", [])),
+            "task": res.task,
+            "metric": res.metric,
+            "direction": res.direction,
+        },
     )
 
 
