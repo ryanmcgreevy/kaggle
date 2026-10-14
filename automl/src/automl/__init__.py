@@ -27,6 +27,15 @@ from automl.families import (
 )
 from automl.loader import DataBundle, load_data
 from automl.metrics import Metric, Task, get_metric, list_metrics, register_metric
+from automl.model_report import (
+    Candidate,
+    CandidateSet,
+    ExcludedEntry,
+    ModelReportConfig,
+    ModelReportResult,
+    collect_candidates,
+    write_model_report,
+)
 from automl.preprocessing import (
     ColumnPlan,
     PreprocessingConfig,
@@ -62,6 +71,8 @@ __all__ = [
     "BaselineConfig",
     "BaselineError",
     "BaselineResult",
+    "Candidate",
+    "CandidateSet",
     "ColumnPlan",
     "DataBundle",
     "DataConfig",
@@ -70,11 +81,14 @@ __all__ = [
     "EdaError",
     "EdaResult",
     "EstimatorUnavailableError",
+    "ExcludedEntry",
     "FamiliesResult",
     "FamilyOutcome",
     "Finding",
     "Metric",
     "ModelData",
+    "ModelReportConfig",
+    "ModelReportResult",
     "PreprocessingConfig",
     "PreprocessingError",
     "ReportConfig",
@@ -101,6 +115,7 @@ __all__ = [
     "ValidationSplitError",
     "build_preprocessor",
     "categorize_failure",
+    "collect_candidates",
     "describe_search_space",
     "estimator_available",
     "fit_transform_fold",
@@ -140,4 +155,5 @@ __all__ = [
     "tune",
     "tune_families",
     "write_eda_report",
+    "write_model_report",
 ]

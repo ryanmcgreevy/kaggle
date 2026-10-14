@@ -140,9 +140,13 @@ Stages should return structured results and persist machine-readable artifacts w
 
 ## Phase 13: Best-Model Results PDF
 
+**Status:** Complete (2026-10-14).
+
 **Deliverable:** Comparison report for selected best models, including validation metrics, variability, configuration, and relevant diagnostics.
 
 **Acceptance:** A report is generated from saved structured run results, remains accurate after process restart, and clearly distinguishes validation scores from leaderboard claims.
+
+**Verification:** With the `reports`, `tuning`, and `boosting` extras in the project-local `.venv`, `pip check` and all 485 tests passed (1 GPU test skipped). Tests cover baseline, tuning, and families sources alone and mixed (paths and loaded results), ranking for both directions and tie-breaks, top-N caps, excluded entries, task/metric mismatch errors naming paths, split warnings, improvement sign, parameter importance and its skip reasons, out-of-fold plots for binary, multiclass, and regression baselines, single-fold messaging, restart equality of the summary JSON via a subprocess, the score statement on every page, byte-identical inputs, output location, overwrite and no-partial-file behavior, missing Matplotlib, `[model_report]` TOML, and core import without Matplotlib or Optuna. No new dependency and no CLI behavior was added. Deviations from the spec: `collect_candidates` returns a `CandidateSet` (candidates, excluded, warnings, notes) rather than a pair; the baseline artifact file is `baseline.json`; out-of-fold plots need an optional `target=` because saved predictions omit true values; PDF text is verified from figure text objects (no PDF text extractor is installed), and page counts from the PDF itself; `load_config` overrides exclude `title` and `top_n`, which belong to the EDA settings.
 
 ## Phase 14: Refit and Prediction
 

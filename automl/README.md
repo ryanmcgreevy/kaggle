@@ -448,3 +448,38 @@ Files are written only inside the output directory (created if missing): `eda_re
 Findings JSON (`schema_version` 1): `config`, `findings` (each `code`, `severity`, `scope`, `message`, `column`, `value`, `threshold`), `charts`, and `charts_skipped`.
 
 Limits: findings are heuristic flags for review, not causal conclusions or removal advice. Charts show only what the EDA result stored (histogram bins, top-N values, drift results from the Phase 4 settings). The `automl report` command reads an EDA JSON artifact and uses `[report]` settings from the supplied TOML file.
+
+## Best-Model Results PDF
+
+`write_model_report` builds a comparison PDF and a summary JSON from saved results only: baseline directories (`baseline.json`), tuning directories (`tuning.json`), and model-family directories (`tuning_families.json`), as paths or loaded results, in any mix. It never refits, rescores, or rereads the data, so it is identical after a process restart. It uses the same optional `reports` extra as the EDA PDF; `collect_candidates` needs neither Matplotlib nor Optuna.
+
+```toml
+[model_report]
+top_n = 3                      # candidates with detail pages; the table lists all
+max_trials_plotted = 200
+min_trials_for_importance = 10
+max_params_importance = 10
+title = "Model Comparison Report"
+```
+
+Keyword overrides for `load_config` use the same names, except `title` (the EDA report's) and `top_n` (the EDA setting of that name); pass `model_report_config=` for those.
+
+```python
+from automl import write_model_report, collect_candidates
+
+result = write_model_report(
+    ["runs/baseline", "runs/tuning", "runs/families"], "reports/", target=train["y"],  # target is optional
+)
+result.path, result.summary_path, result.pages, result.candidates, result.excluded, result.charts_skipped
+collect_candidates("runs/families")      # ranking and warnings only
+```
+
+- **Candidates:** a baseline run; a tuning run's best completed trial; each completed family's best trial. Failed families and tunings without a completed trial are listed as `excluded` with a reason. Candidates must share task, metric, and direction (otherwise `ReportError` names each path); differing row counts, fold counts, or split hashes produce a warning. Ranking is by mean validation score in the metric direction, ties by lower fold std, then input order.
+- **Pages:** overview and ranked table, cross-candidate charts (`score_comparison`, `fold_variability`, `improvement`), then per top-N candidate a configuration page plus `trial_history`, `parameter_importance`, and `oof_diagnostics` where they apply. Skipped charts and reasons are in `charts_skipped`.
+- **Improvement:** tuned minus baseline mean, positive is better, only when row count, fold count, and split hashes match.
+- **Parameter importance:** absolute Spearman correlation with the score (correlation ratio for categorical parameters) over completed trials; skipped below `min_trials_for_importance`. Descriptive, not causal.
+- **Out-of-fold plots:** baseline directories only, because tuning artifacts store no predictions, and only when `target=` (the training target column, in original row order) is supplied, because saved predictions omit the true values. They give a confusion matrix and calibration (binary probabilities) or predicted-vs-actual and residuals (regression).
+
+Files are written only inside the output directory: `model_report.pdf` (or `filename=`) and `<stem>_summary.json` (`schema_version` 1: `candidates`, `excluded`, `warnings`, `charts`, `charts_skipped`, `config`, `notes`, `score_statement`). Existing files are refused unless `overwrite=True`; writes are atomic.
+
+Limits: every page states that scores are validation scores on the training data, optimistic after selection, and not leaderboard predictions. Single-fold (holdout) candidates have no estimable variability. The `[model_report]` table is read by `load_config`; no CLI command exists yet.
