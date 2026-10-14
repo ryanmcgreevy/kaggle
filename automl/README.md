@@ -127,6 +127,45 @@ result = load_splits("splits.json")                # result.splits[i].train_idx 
 
 Artifact (`splits.json`, `schema_version` 1): `strategy`, `seed`, `n_folds`, `holdout_fraction`, `task`, `stratified`, `n_rows`, and `splits`, a list of `{fold, n_train, n_valid, train_idx, valid_idx}`. Holdout has one split (fold 0). `load_splits` rejects malformed files, out-of-range or duplicate indices, train/validation overlap, size mismatches, and k-fold validation sets that do not cover every row exactly once. The `automl split` command uses this same API and artifact contract.
 
+## Leakage-Safe Preprocessing
+
+An optional `[preprocessing]` table (config version 1) configures imputation, encoding, and scaling. Defaults are shown; every key except `seed` can be passed as a `load_config` keyword override, or pass `preprocessing_config=`.
+
+```toml
+[preprocessing]
+numeric_imputer = "median"          # mean | median | constant
+numeric_fill_value = 0              # used when numeric_imputer = "constant"
+categorical_imputer = "most_frequent"  # most_frequent | constant
+categorical_fill_value = "missing"
+encoder = "onehot"                  # onehot | ordinal | target
+scaler = "none"                     # none | standard | robust
+max_cardinality = 20                # integer columns with more unique values are numeric
+numeric_columns = []                # explicit overrides
+categorical_columns = []
+drop_columns = []
+seed = 42                           # target-encoder cross-fitting
+```
+
+- The target and `id_columns` are always excluded. Naming one in an override raises `automl.PreprocessingError`. Columns not typed (including dropped ones) never reach the model (`remainder="drop"`).
+- Inference: float and high-cardinality integer columns are numeric; string, category, bool, and low-cardinality integer columns are categorical; constant, all-null, and datetime columns are dropped. Every decision and its reason is in `plan.reasons`. Categorical values are converted to text, so mixed-type columns encode consistently.
+- One-hot and ordinal encoders map unseen categories to all-zero / `-1`. Target encoding uses scikit-learn `TargetEncoder`, which cross-fits internally during `fit_transform`; `transform` uses encodings fit on all training rows. Output is dense. Infinite numeric values are treated as missing.
+- `build_preprocessor` returns an unfitted, clonable `ColumnTransformer`. Learned state (imputation statistics, categories, scale, target means) exists only after `fit`, so use it inside a `Pipeline` for CV or call `fit_transform_fold`, which fits a clone on the split's train rows only.
+
+```python
+from automl import (
+    build_preprocessor, fit_transform_fold, infer_columns, load_plan, save_plan,
+)
+
+cfg = load_config("run.toml")
+plan = infer_columns(bundle.train, cfg.target, cfg.id_columns, cfg.preprocessing_config)
+pre = build_preprocessor(plan, cfg.preprocessing_config, resolved.task)
+X_train, X_valid = fit_transform_fold(pre, bundle.train, bundle.train[cfg.target], result.splits[0])
+save_plan(plan, cfg.preprocessing_config, "plan.json")   # refuses to overwrite
+plan, prep_cfg = load_plan("plan.json")
+```
+
+Artifact (`plan.json`, `schema_version` 1): `config` (effective settings), `numeric`, `categorical`, `dropped`, `excluded`, and `reasons` (column to reason). `load_plan` rejects unknown settings, wrong types, and columns listed in more than one group. Fitted preprocessors are not persisted; they live inside fitted pipelines in later phases. No CLI command exists for this phase.
+
 ## EDA Summary
 
 `summarize` returns a structured, non-mutating `EdaResult`; `save_eda` persists it as JSON for later stages (such as the Phase 5 PDF). The task is never inferred here: pass a `ResolvedTask`, `Task`, or task name to get class or regression target details.

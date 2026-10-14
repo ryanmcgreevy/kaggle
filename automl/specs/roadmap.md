@@ -80,9 +80,13 @@ Stages should return structured results and persist machine-readable artifacts w
 
 ## Phase 7: Leakage-Safe Preprocessing
 
+**Status:** Complete (2026-10-14).
+
 **Deliverable:** Reusable numeric and categorical preprocessing pipelines with configurable imputation and encoding, compatible with scikit-learn CV.
 
 **Acceptance:** Tests cover mixed types and missing values, estimator cloning, and fold-local fitting; validation data cannot influence learned preprocessing statistics.
+
+**Verification:** Installed into the project-local `.venv`; `pip check`, CLI help, and all 231 tests passed, covering every imputer/encoder/scaler combination, column inference and overrides, ID/target exclusion, unseen categories, cloning and `cross_val_score`, leakage checks that rewriting validation rows leaves train output and fitted statistics unchanged, `[preprocessing]` config errors and TOML parsing, and the plan artifact round trip. No new dependency and no CLI behavior was added.
 
 ## Phase 8: Quick Baseline
 

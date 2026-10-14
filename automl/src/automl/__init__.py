@@ -2,9 +2,25 @@
 
 from automl.config import DataConfig, load_config
 from automl.eda import EdaConfig, EdaResult, load_eda, save_eda, summarize, summarize_bundle
-from automl.errors import DataContractError, EdaError, ReportError, TaskMetricError, ValidationSplitError
+from automl.errors import (
+    DataContractError,
+    EdaError,
+    PreprocessingError,
+    ReportError,
+    TaskMetricError,
+    ValidationSplitError,
+)
 from automl.loader import DataBundle, load_data
 from automl.metrics import Metric, Task, get_metric, list_metrics, register_metric
+from automl.preprocessing import (
+    ColumnPlan,
+    PreprocessingConfig,
+    build_preprocessor,
+    fit_transform_fold,
+    infer_columns,
+    load_plan,
+    save_plan,
+)
 from automl.report import Finding, ReportConfig, ReportResult, build_findings, write_eda_report
 from automl.task import (
     ResolvedTask,
@@ -17,6 +33,7 @@ from automl.task import (
 from automl.validation import Split, SplitResult, ValidationConfig, load_splits, make_splits, save_splits
 
 __all__ = [
+    "ColumnPlan",
     "DataBundle",
     "DataConfig",
     "DataContractError",
@@ -25,6 +42,8 @@ __all__ = [
     "EdaResult",
     "Finding",
     "Metric",
+    "PreprocessingConfig",
+    "PreprocessingError",
     "ReportConfig",
     "ReportError",
     "ReportResult",
@@ -37,16 +56,21 @@ __all__ = [
     "TaskMetricError",
     "ValidationConfig",
     "ValidationSplitError",
+    "build_preprocessor",
+    "fit_transform_fold",
     "get_metric",
+    "infer_columns",
     "list_metrics",
     "load_config",
     "load_data",
     "load_eda",
+    "load_plan",
     "load_splits",
     "make_splits",
     "register_metric",
     "resolve_task_metric",
     "save_eda",
+    "save_plan",
     "save_splits",
     "build_findings",
     "suggest_metric",
