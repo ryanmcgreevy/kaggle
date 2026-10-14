@@ -19,11 +19,11 @@ from sklearn.pipeline import Pipeline
 from automl.baseline import RESULT_FILE as BASELINE_FILE
 from automl.baseline import BaselineResult, load_baseline, save_baseline
 from automl.errors import TrackingError, TrackingUnavailableError
-from automl.estimators import FeatureLayout, get_estimator_spec, resolve_device
 from automl.families import FAMILIES_FILE, FamiliesResult, load_tuning_families
 from automl.families import _write as _write_families
 from automl.metrics import Task
-from automl.preprocessing import PreprocessingConfig, build_preprocessor, infer_columns
+from automl.preprocessing import PreprocessingConfig
+from automl.refit import build_pipeline
 from automl.tuning import RESULT_FILE as TUNING_FILE
 from automl.tuning import TrialRecord, TuningResult, _write as _write_tuning, load_tuning
 
@@ -235,20 +235,15 @@ def _fit_pipeline(
     data: ModelData, estimator: str, params: dict[str, Any], seed: int, n_jobs: int, device: str,
     native_categoricals: bool | None, prep_cfg: PreprocessingConfig, expected_features: list[str] | None,
 ) -> tuple[Pipeline, pd.DataFrame]:
-    spec = get_estimator_spec(estimator)
-    spec.require()
-    native = spec.native_default if native_categoricals is None else native_categoricals
-    task = data.resolved_task.task
-    plan = infer_columns(data.train, data.target, data.id_columns, prep_cfg)
+    pipeline, plan, fit_params, _, _ = build_pipeline(
+        data.train, data.target, data.id_columns, data.resolved_task.task, estimator, params, seed, n_jobs,
+        device, native_categoricals, prep_cfg,
+    )
     features = [*plan.numeric, *plan.categorical]
     if expected_features is not None and features != expected_features:
         raise TrackingError("model data columns differ from the columns the result was built with")
-    layout = FeatureLayout(len(plan.numeric), len(plan.categorical), native)
-    choice = resolve_device(spec, device)
-    est = spec.make(task, params, seed, n_jobs, choice.effective, layout)
-    pipeline = Pipeline([("pre", build_preprocessor(plan, prep_cfg, task, native_categoricals=native)), ("model", est)])
     X = data.train[features]
-    pipeline.fit(X, data.train[data.target], **{f"model__{k}": v for k, v in spec.fit_params(layout).items()})
+    pipeline.fit(X, data.train[data.target], **fit_params)
     return pipeline, X
 
 
@@ -551,3 +546,45 @@ def track_families(
                     mlflow.log_artifact(str(Path(tmp) / FAMILIES_FILE))
             mlflow.set_tags(_tags(cfg, "tuning_families", versions, notes, {}))
             return TrackingResult(s.shown, cfg.experiment_name, s.experiment_id, run.info.run_id, tuple(child_ids), model_uri, tuple(notes))
+
+
+def track_refit(
+    pipeline: Pipeline,
+    X: pd.DataFrame,
+    metadata: dict[str, Any],
+    tracking: TrackingConfig,
+    directory: str | Path | None = None,
+) -> TrackingResult:
+    """Log a fitted refit pipeline with its selection, provenance, and refit.json (no data or predictions)."""
+    _require_mlflow()
+    cfg = tracking
+    sel = metadata["selection"]
+    notes: list[str] = [SELECTION_NOTE]
+    with _Session(cfg, directory) as s:
+        mlflow = s.mlflow
+        with mlflow.start_run(run_name=cfg.run_name or f"refit-{sel['estimator']}-seed{sel['seed']}") as run:
+            _log_params(
+                mlflow,
+                {
+                    **_flatten({k: v for k, v in sel.items() if k not in ("versions", "notes", "features")}, "selection"),
+                    **_flatten({"task": metadata["task"], "n_train_rows": metadata["data"]["n_train_rows"]}),
+                },
+            )
+            for key, name in (("validation_mean", "validation_mean_score"), ("validation_std", "validation_std_score")):
+                if sel.get(key) is not None:
+                    mlflow.log_metric(name, sel[key])
+            mlflow.log_metric("fit_seconds", metadata["fit_seconds"])
+            model_uri = _log_pipeline(mlflow, pipeline, X, notes) if cfg.log_model else None
+            if not cfg.log_model:
+                notes.append("model not logged: 'log_model' is false")
+            with tempfile.TemporaryDirectory() as tmp:
+                path = Path(tmp) / "refit.json"
+                path.write_text(json.dumps(metadata, indent=2, allow_nan=False))
+                mlflow.log_artifact(str(path))
+            mlflow.set_tags(
+                _tags(
+                    cfg, "refit", metadata.get("versions", {}), notes,
+                    {"automl.source_kind": sel["source_kind"], "automl.label": sel["label"]},
+                )
+            )
+            return TrackingResult(s.shown, cfg.experiment_name, s.experiment_id, run.info.run_id, (), model_uri, tuple(notes))

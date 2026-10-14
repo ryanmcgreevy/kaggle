@@ -483,3 +483,53 @@ collect_candidates("runs/families")      # ranking and warnings only
 Files are written only inside the output directory: `model_report.pdf` (or `filename=`) and `<stem>_summary.json` (`schema_version` 1: `candidates`, `excluded`, `warnings`, `charts`, `charts_skipped`, `config`, `notes`, `score_statement`). Existing files are refused unless `overwrite=True`; writes are atomic.
 
 Limits: every page states that scores are validation scores on the training data, optimistic after selection, and not leaderboard predictions. Single-fold (holdout) candidates have no estimable variability. The `[model_report]` table is read by `load_config`; no CLI command exists yet.
+
+## Refit and Prediction
+
+`refit_and_predict` refits one selected pipeline on every training row and predicts the test rows. The pipeline comes from a saved baseline, tuning, or families directory (or loaded result), or from an explicit estimator and parameters. Preprocessing and estimator are rebuilt and fitted together as one scikit-learn `Pipeline`; fold models from earlier runs are never reused. Outputs are raw model outputs: no clipping, thresholding, or submission schema checks (the next phase). Needs no optional package beyond the chosen estimator's; MLflow is used only when `tracking=` is passed.
+
+```toml
+[refit]
+save_model = true         # write pipeline.joblib
+probabilities = true      # classification: add proba_<class> columns when the estimator has predict_proba
+proba_tolerance = 1e-5    # allowed deviation for the [0, 1] and row-sum checks
+max_reported_rows = 10    # offending row positions listed per problem
+```
+
+Keyword overrides for `load_config` use the same names; `refit_config=` replaces the table.
+
+```python
+from automl import TrackingConfig, load_config, load_data, load_refit, refit_and_predict, resolve_task_metric
+
+cfg = load_config("run.toml")
+bundle = load_data(cfg)
+resolved = resolve_task_metric(bundle.train[cfg.target], cfg.task_config)  # as when the run was validated
+
+result = refit_and_predict(
+    "runs/families",                      # or select_pipeline(estimator="xgboost", params={...}, task="binary")
+    bundle.train, bundle.test,
+    target=cfg.target, id_columns=cfg.id_columns, resolved_task=resolved,
+    rank=1,                               # or label="family:lightgbm"; default is rank 1 with a note
+    directory="runs/refit",               # omit to skip writing files
+    tracking=TrackingConfig(),            # optional: log the pipeline to MLflow under runs/refit
+)
+result.predictions.frame                  # ids, `prediction`, and `proba_<class>` columns
+loaded = load_refit("runs/refit", load_model=True)   # metadata and predictions load without estimator libraries
+```
+
+The steps are also available separately: `select_pipeline`, `refit`, `predict`, `save_refit`.
+
+- **Selection:** sources go through `collect_candidates`, so ranking and labels match the model report. With several candidates and no `label` or `rank`, rank 1 is used and `selection.notes` says so. Explicit selection validates estimator, task, device, and parameters (controlled keys such as `random_state` are rejected) and needs `task`.
+- **Refit:** uses the selected parameters, seed, device request, categorical handling, and preprocessing config, and requires the train features to equal the selected result's. Null targets, missing columns, and a task or metric that differs from the selection raise `RefitError`.
+- **Prediction:** test rows need every training feature; extra columns are ignored, ID columns are copied unchanged in test order. Classification returns labels in the original target dtype; `proba_<class>` columns follow `fitted.classes`. Unseen categories follow the chosen encoder's handling.
+- **Validity checks:** prediction count equals test rows; no NaN or infinity; labels are training classes; probabilities within [0, 1] and summing to 1 within `proba_tolerance`. Any violation raises `RefitError` with the problem and offending row positions, and nothing is written.
+
+Files in the output directory (existing files are refused unless `overwrite=True`; writes are atomic):
+
+- `predictions.csv`: ID columns, `prediction`, then `proba_<class>` columns; row i matches test row i.
+- `refit.json` (`schema_version` 1): `task`, `selection` (source, label, estimator, parameters, preprocessing, seed, device, trial number, validation mean/std), `config`, `data` (target, id columns, row counts, numeric/categorical/excluded columns, classes), `prediction` (kind, columns, notes), `device`, `fit_seconds`, `versions`, `files`. Loads without Optuna, MLflow, or boosting libraries.
+- `pipeline.joblib`: the fitted pipeline when `save_model` is true. It is a pickle: load it only from a directory you trust, with matching library versions.
+
+With `tracking=`, the fitted pipeline (cloudpickle), selection parameters, provenance tags, validation mean/std, and `refit.json` are logged as one run (`automl.kind=refit`); raw data and predictions are not. The check for MLflow happens before fitting, and a logging failure raises `TrackingError` after the local files were written.
+
+Limits: one pipeline per call (no ensembling or seed averaging); exact repeatability only on CPU; validation scores in `selection` are optimistic after selection and are not leaderboard estimates; no CLI command exists yet.

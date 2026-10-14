@@ -12,6 +12,7 @@ from automl.eda import EDA_KEYS, EdaConfig
 from automl.errors import DataContractError
 from automl.model_report import MODEL_REPORT_KEYS, ModelReportConfig
 from automl.preprocessing import PREPROCESSING_KEYS, PreprocessingConfig
+from automl.refit import REFIT_KEYS, RefitConfig
 from automl.report import REPORT_KEYS, ReportConfig
 from automl.task import TaskConfig
 from automl.tracking import TRACKING_KEYS, TrackingConfig
@@ -25,7 +26,7 @@ _VALIDATION_KEYS = {"strategy", "seed", "n_folds", "holdout_fraction"}
 _VALIDATION_OVERRIDES = {"strategy", "n_folds", "holdout_fraction"}  # 'seed' override stays the run seed
 _PREPROCESSING_OVERRIDES = PREPROCESSING_KEYS - {"seed"}  # 'seed' override stays the run seed
 _BASELINE_OVERRIDES = BASELINE_KEYS - {"seed"}  # 'seed' override stays the run seed
-_TOP_KEYS = {"version", "seed", "data", "task", "validation", "preprocessing", "baseline", "tuning", "tracking", "eda", "report", "model_report"}
+_TOP_KEYS = {"version", "seed", "data", "task", "validation", "preprocessing", "baseline", "tuning", "tracking", "eda", "report", "model_report", "refit"}
 _MODEL_REPORT_OVERRIDES = MODEL_REPORT_KEYS - {"title"} - EDA_KEYS  # shared names keep their other meaning
 
 
@@ -46,6 +47,7 @@ class DataConfig:
     eda_config: EdaConfig = field(default_factory=EdaConfig)
     report_config: ReportConfig = field(default_factory=ReportConfig)
     model_report_config: ModelReportConfig = field(default_factory=ModelReportConfig)
+    refit_config: RefitConfig = field(default_factory=RefitConfig)
 
     def __post_init__(self) -> None:
         problems: list[str] = []
@@ -171,6 +173,13 @@ def load_config(path: str | Path, **overrides: Any) -> DataConfig:
     unknown = set(model_report_tbl) - MODEL_REPORT_KEYS
     if unknown:
         problems.append(f"config file {path}: unknown keys in [model_report]: {sorted(unknown)}")
+    refit_tbl = raw.get("refit", {})
+    if not isinstance(refit_tbl, dict):
+        problems.append(f"config file {path}: [refit] must be a table")
+        refit_tbl = {}
+    unknown = set(refit_tbl) - REFIT_KEYS
+    if unknown:
+        problems.append(f"config file {path}: unknown keys in [refit]: {sorted(unknown)}")
     valid_overrides = (
         {f.name for f in fields(DataConfig)}
         | _TASK_KEYS
@@ -180,6 +189,7 @@ def load_config(path: str | Path, **overrides: Any) -> DataConfig:
         | EDA_KEYS
         | REPORT_KEYS
         | _MODEL_REPORT_OVERRIDES
+        | REFIT_KEYS
     )
     bad = set(overrides) - valid_overrides
     if bad:
@@ -260,6 +270,13 @@ def load_config(path: str | Path, **overrides: Any) -> DataConfig:
     if "model_report_config" not in overrides:
         try:
             values["model_report_config"] = ModelReportConfig(**mr_values)
+        except DataContractError as exc:
+            raise DataContractError([f"config file {path}: {p}" for p in exc.problems]) from None
+    refit_values = {k: v for k, v in refit_tbl.items() if k in REFIT_KEYS}
+    refit_values.update({k: overrides.pop(k) for k in REFIT_KEYS if k in overrides})
+    if "refit_config" not in overrides:
+        try:
+            values["refit_config"] = RefitConfig(**refit_values)
         except DataContractError as exc:
             raise DataContractError([f"config file {path}: {p}" for p in exc.problems]) from None
     values.update(overrides)
