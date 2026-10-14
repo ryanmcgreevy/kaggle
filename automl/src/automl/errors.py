@@ -51,6 +51,16 @@ class EstimatorUnavailableError(BaselineError):
     """A selected estimator's library or device is unavailable."""
 
 
+class TuningError(DataContractError):
+    """Tuning settings, search space, inputs, or study artifacts are invalid."""
+
+    _header = "Tuning problems:"
+
+
+class TuningUnavailableError(TuningError):
+    """The optional Optuna dependency is not installed."""
+
+
 class ReportError(DataContractError):
     """Report settings, inputs, or output location are invalid."""
 

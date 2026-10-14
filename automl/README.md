@@ -16,7 +16,7 @@ Run the test suite:
 python -m pytest
 ```
 
-Optional model libraries are installed with extras (`lightgbm`, `xgboost`, `catboost`, or `boosting` for all); adapter tests are skipped when a library is absent.
+Optional model libraries are installed with extras (`lightgbm`, `xgboost`, `catboost`, or `boosting` for all); adapter tests are skipped when a library is absent. Hyperparameter tuning needs the `tuning` extra (`pip install 'automl[tuning]'`, Optuna); its tests are skipped without it.
 
 ## CLI
 
@@ -246,6 +246,42 @@ result.estimator_key, result.categorical_handling, result.device
 ```
 
 Artifact `schema_version` 2 adds `estimator.key`, `categorical_handling`, and `device`, and records the library version under `versions`. No CLI command exists for this phase.
+
+## Optuna Tuning
+
+`tune` searches the hyperparameters of one estimator with Optuna, scoring each trial as the mean validation score over the given splits (the same fold runner, leakage-safe preprocessing, and metric as `run_baseline`). Install the optional dependency with `pip install 'automl[tuning]'`; without it `tune` raises `automl.TuningUnavailableError` before any work, and `import automl`, the baseline, and `load_tuning` still work. An optional `[tuning]` table (opt-in; absent means `cfg.tuning_config is None`) configures the run:
+
+```toml
+[tuning]
+n_trials = 30            # and/or timeout_seconds; at least one is required
+timeout_seconds = 600
+pruning = false          # true: median pruner on cumulative fold means
+seed = 42
+estimator = "hist_gradient_boosting"   # same estimator, native_categoricals, device, n_jobs keys as [baseline]
+[tuning.estimator_params]  # fixed (not tuned) parameters
+max_leaf_nodes = 31
+```
+
+- Direction (maximize or minimize) comes from the metric and is recorded in the result. The sampler is `TPESampler(seed=seed)`; on CPU with a fixed seed, data, splits, and library versions, trials repeat. Runs bounded by `timeout_seconds` do not repeat, and a running trial is never interrupted, so overrun is at most one trial (reported in `budgets`).
+- Search space: a mapping `{name: {"type": "float"|"int"|"categorical", "low", "high", "log", "step", "choices"}}`, or a callable `fn(trial) -> dict` of estimator parameters. Only `hist_gradient_boosting` has a built-in space (used when `space` is omitted); other estimators require `space` until per-family spaces arrive. Parameters are merged over `estimator_params`; controlled keys (seed, threads, device, verbosity, early stopping, categorical settings) and keys fixed in `estimator_params` are rejected.
+- A trial that raises is recorded as `failed` with its reason and the study continues; failed and pruned trials are never best. If no trial completes, `TuningError` summarizes the reasons. Pruned trials keep the fold scores computed before pruning.
+- Scores are search-selected validation means and are optimistically biased; they are not leaderboard claims. Final refit and prediction are later phases.
+
+```python
+from automl import TuningConfig, tune, resume_tuning, load_tuning
+
+space = {"learning_rate": {"type": "float", "low": 0.01, "high": 0.3, "log": True}}
+result = tune(
+    bundle.train, cfg.target, cfg.id_columns, resolved, splits,
+    TuningConfig(n_trials=30, seed=42), space=space,
+    preprocessing_config=cfg.preprocessing_config, directory="runs/tuning",   # new directory
+)
+result.best.params, result.best.score, result.direction
+result = resume_tuning("runs/tuning", bundle.train, cfg.target, cfg.id_columns, resolved, splits, n_trials=10)
+result = load_tuning("runs/tuning")        # reads tuning.json only; no Optuna needed
+```
+
+Artifact directory (created by `directory=`; an existing directory is refused): `study.db` (Optuna SQLite storage) and `tuning.json` (`schema_version` 1: `task`, `metric`, `config`, `space`, `fingerprint`, `budgets` (one entry per run), `best_trial`, `trials` with `number`/`state`/`params`/`score`/`fold_scores`/`fold_std`/`duration_seconds`/`failure_reason`, `versions`, `notes`). No training data is stored, nothing leaves the directory, and no network access is used. `resume_tuning` adds trials to the same study; its `n_trials`/`timeout_seconds` budget applies to the new trials only. It checks a fingerprint (rows, features, target, metric, estimator, seed, fixed parameters, preprocessing, and a hash of the split indices) and raises `TuningError` naming any difference. Mapping spaces are saved and reused; a callable space is not serializable and must be passed again. A resumed study reseeds the sampler as `seed + number of existing trials`. No CLI command exists for this phase.
 
 ## EDA Summary
 

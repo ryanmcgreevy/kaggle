@@ -110,9 +110,13 @@ Stages should return structured results and persist machine-readable artifacts w
 
 ## Phase 10: Optuna Tuning Core
 
+**Status:** Complete (2026-10-14).
+
 **Deliverable:** A reusable tuner for one baseline/boosting estimator, with seeded sampler, explicit metric direction, trial/time budget, CV objective, and persisted trial results.
 
 **Acceptance:** A small synthetic study completes within its configured budget, produces repeatable results where estimator behavior permits, and can be inspected or resumed from local study artifacts.
+
+**Verification:** Installed the optional `tuning` extra (Optuna 5.0.0) into the project-local `.venv`; `pip check`, CLI help, and all 356 tests passed (1 GPU test skipped). The tuning tests also skip cleanly with Optuna uninstalled while config, `[tuning]` TOML, and absence-error tests pass. Tests cover all three task types, both metric directions, `n_trials`, `timeout_seconds`, and combined budgets, seeded repeatability, fold scores equal to `run_baseline` for fixed parameters, mapping and callable spaces with invalid-space errors, failed and pruned trial records, leakage and non-mutation, holdout, the `tuning.json` round trip without Optuna, no-overwrite, and resume (same study, mismatch and callable-space errors). Core dependencies are unchanged and no CLI behavior was added. Persistence happens only through the `directory=` argument; there is no separate `save_tuning`.
 
 ## Phase 11: Model-Family Search Spaces
 
