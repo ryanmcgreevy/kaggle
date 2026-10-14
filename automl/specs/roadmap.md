@@ -120,9 +120,13 @@ Stages should return structured results and persist machine-readable artifacts w
 
 ## Phase 11: Model-Family Search Spaces
 
+**Status:** Complete (2026-10-14).
+
 **Deliverable:** Separate, documented Optuna search spaces for each supported estimator; users can choose families and budgets explicitly.
 
 **Acceptance:** Tests verify sampled parameters are valid for the installed estimator and task; failed trials are recorded with a useful reason and do not corrupt successful results.
+
+**Verification:** With the `tuning` and `boosting` extras in the project-local `.venv`, `pip check`, CLI help, and all 424 tests passed (1 GPU test skipped); in a clean environment with no extras, 316 passed and 62 skipped. Tests cover a documented task-aware space for each of `hist_gradient_boosting`, `lightgbm`, `xgboost`, and `catboost` with midpoint parameters accepted by every installed estimator and 2-3 trial studies on all three tasks, controlled keys never sampled, TOML range overrides (narrow, drop, fix) with errors naming the key, `tune_families` with explicit and default families, per-family and shared budgets, a missing-family install hint, failure isolation across families, ranking for both metric directions, identical splits and repeatability, categorized failed trials (`invalid_parameter`, `library_error`, `timeout`, `non_finite_score`, `other`), the `tuning_families.json` round trip without Optuna, per-family resume, no overwrite, and `tuning.json` schema 1 loading under schema 2. No new dependency and no CLI behavior was added. Two deliberate deviations from the spec: registry spaces are task-aware functions returning mapping specs (not `fn(trial, task)` callables) so overrides, persistence, and resume work, and the Phase 10 test that expected an error for a non-HGB estimator without a space was changed because those estimators now have built-in spaces.
 
 ## Phase 12: Optional MLflow Tracking
 

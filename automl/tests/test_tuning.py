@@ -82,12 +82,13 @@ def test_direction_both_ways():
     assert do_tune("binary", "log_loss")[3].direction == "minimize"
 
 
-def test_builtin_space_and_missing_space():
+def test_builtin_space_and_registry_space():
     df, resolved, splits = setup()
     res = tune(df, "y", ("id",), resolved, splits, TuningConfig(n_trials=2))
     assert res.space["kind"] == "builtin" and set(res.trials[0].params) == set(res.space["spec"])
-    with pytest.raises(TuningError, match="no built-in search space"):
-        tune(df, "y", ("id",), resolved, splits, TuningConfig(n_trials=1, estimator="lightgbm"))
+    pytest.importorskip("lightgbm")
+    res = tune(df, "y", ("id",), resolved, splits, TuningConfig(n_trials=1, estimator="lightgbm"))
+    assert res.space["kind"] == "builtin" and "num_leaves" in res.space["spec"]
 
 
 def test_budgets():
