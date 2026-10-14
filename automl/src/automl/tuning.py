@@ -174,6 +174,14 @@ def _require_optuna() -> Any:
     return optuna
 
 
+def _require_tracking(tracking: Any) -> None:
+    """Raise the MLflow install hint before any work when tracking is requested but unavailable."""
+    if tracking is not None and tracking.enabled:
+        from automl.tracking import _require_mlflow
+
+        _require_mlflow()
+
+
 # ---- search spaces ----
 
 _NUMERIC_KEYS = {"type", "low", "high", "log", "step"}
@@ -524,9 +532,14 @@ def tune(
     space: SearchSpace | None = None,
     preprocessing_config: PreprocessingConfig | None = None,
     directory: str | Path | None = None,
+    tracking: Any = None,
 ) -> TuningResult:
-    """Tune one estimator with mean validation score over `splits`; persists to `directory` if given."""
+    """Tune one estimator with mean validation score over `splits`; persists to `directory` if given.
+
+    A `TrackingConfig` passed as `tracking` mirrors the finished study to MLflow after local persistence.
+    """
     optuna = _require_optuna()
+    _require_tracking(tracking)
     if config.n_trials is None and config.timeout_seconds is None:
         raise TuningError("set 'n_trials' and/or 'timeout_seconds'; tune needs a budget (use tune_families for per-family budgets)")
     prep_cfg = preprocessing_config or PreprocessingConfig(encoder="ordinal", seed=config.seed)
@@ -549,7 +562,9 @@ def tune(
         pruner=optuna.pruners.MedianPruner(n_startup_trials=PRUNER_STARTUP_TRIALS) if config.pruning else optuna.pruners.NopPruner(),
     )
     budget = _run(optuna, study, setup, sampler_fn, config.n_trials, config.timeout_seconds)
-    return _finish(_build_result(optuna, study, setup, space_desc, [budget], path))
+    result = _finish(_build_result(optuna, study, setup, space_desc, [budget], path))
+    _track(tracking, result, train, target, id_columns, resolved_task, prep_cfg)
+    return result
 
 
 def resume_tuning(
@@ -563,9 +578,11 @@ def resume_tuning(
     timeout_seconds: float | None = None,
     space: SearchSpace | None = None,
     preprocessing_config: PreprocessingConfig | None = None,
+    tracking: Any = None,
 ) -> TuningResult:
     """Run additional trials on a saved study; the budget applies to the new trials only."""
     optuna = _require_optuna()
+    _require_tracking(tracking)
     path = Path(directory)
     saved = load_tuning(path)
     if not (path / STUDY_FILE).is_file():
@@ -593,7 +610,20 @@ def resume_tuning(
         optuna.pruners.MedianPruner(n_startup_trials=PRUNER_STARTUP_TRIALS) if config.pruning else optuna.pruners.NopPruner()
     )
     budget = _run(optuna, study, setup, sampler_fn, n_trials, timeout_seconds)
-    return _finish(_build_result(optuna, study, setup, space_desc, [*saved.budgets, budget], path))
+    result = _finish(_build_result(optuna, study, setup, space_desc, [*saved.budgets, budget], path))
+    _track(tracking, result, train, target, id_columns, resolved_task, prep_cfg, since_trial=len(saved.trials))
+    return result
+
+
+def _track(tracking, result, train, target, id_columns, resolved_task, prep_cfg, since_trial: int = 0) -> None:
+    if tracking is None or not tracking.enabled:
+        return
+    from automl.tracking import ModelData, track_tuning
+
+    track_tuning(
+        result, tracking, data=ModelData(train, target, tuple(id_columns), resolved_task),
+        preprocessing_config=prep_cfg, since_trial=since_trial,
+    )
 
 
 # ---- persistence ----

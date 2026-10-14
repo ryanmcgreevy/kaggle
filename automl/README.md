@@ -16,8 +16,7 @@ Run the test suite:
 python -m pytest
 ```
 
-Optional model libraries are installed with extras (`lightgbm`, `xgboost`, `catboost`, or `boosting` for all); adapter tests are skipped when a library is absent. Hyperparameter tuning needs the `tuning` extra (`pip install 'automl[tuning]'`, Optuna); its tests are skipped without it.
-
+Optional model libraries are installed with extras (`lightgbm`, `xgboost`, `catboost`, or `boosting` for all); adapter tests are skipped when a library is absent. Hyperparameter tuning needs the `tuning` extra (`pip install 'automl[tuning]'`, Optuna); its tests are skipped without it. MLflow tracking needs the `mlflow` extra (`pip install 'automl[mlflow]'`); its integration tests are skipped without it.
 ## CLI
 
 The CLI exposes the existing data and EDA capabilities. Successful workflow commands print a JSON result to stdout; workflow errors are printed to stderr and exit with status 1. Input paths in the TOML resolve relative to that file. Output directories are relative to the current working directory and are created when needed.
@@ -325,6 +324,51 @@ res = resume_tuning_families("runs/families", bundle.train, cfg.target, cfg.id_c
 ```
 
 Artifacts: `<directory>/<family>/` holds the single-study `study.db` and `tuning.json`; `<directory>/tuning_families.json` (`schema_version` 1) holds `task`, `metric`, `config`, `budget_plan` (written before any trial runs), `families` (status, directory, error), `comparison`, `best_family`, and `notes`. An existing directory is refused. Family scores are search-selected validation means, optimistically biased, and are not leaderboard claims. No CLI command exists for this phase.
+
+## Optional MLflow Tracking
+
+Install with `pip install 'automl[mlflow]'` (MLflow 3.x). Tracking mirrors results to MLflow only when you ask; without it nothing changes, `import automl` never imports MLflow, and requesting tracking without the package raises `automl.TrackingUnavailableError` (naming the install command) before any work. Local result directories remain the source of truth: a tracking failure raises `TrackingError` ("local results are intact") and never alters local files. No CLI flag exists for this phase.
+
+Pass a `TrackingConfig` as `tracking=` to `run_baseline`, `tune`, `resume_tuning`, `tune_families`, or `resume_tuning_families`, or mirror an existing result later with `track_baseline`, `track_tuning`, or `track_families` (each takes a result object or a saved directory). Mirroring happens after the local work finishes; a study with no completed trial is not mirrored.
+
+| `[tracking]` key | Default | Meaning |
+|---|---|---|
+| `enabled` | `true` | `false` turns tracking off while keeping the section |
+| `tracking_uri` | none | any MLflow URI; overrides the local default |
+| `directory` | none | run directory for the local default store |
+| `experiment_name` | `automl` | experiment to log into |
+| `run_name` | derived | e.g. `tuning-lightgbm-seed42` |
+| `tags` | `{}` | extra string tags; credential-like names are rejected |
+| `log_model` | `true` | log the fitted pipeline |
+| `max_trials_logged` | `200` | cap on nested trial runs; the best trial is always kept |
+
+Destination: `tracking_uri` if set, otherwise a SQLite store `<directory>/mlflow.db` with artifacts in `<directory>/mlartifacts`, where `directory` is `TrackingConfig.directory` or the tuning/result directory. With neither, a `TrackingError` asks for one. Hosted servers are used only if you supply their URI; credentials in a URI are redacted (`user:***@`) in every message, tag, and result.
+
+Layout: a baseline is one run. A tuning study is a parent run (config, direction, counts, `best_score`, best parameters, `tuning.json`) with one nested run per trial (`param.*`, `score`, `fold_score` by step, `fold_std`, `duration_seconds`, `automl.trial_state`, failure reason and category, `automl.is_best`). `track_families` logs a top-level run (`rank.<family>` params, `automl.best_family`, `tuning_families.json`) with a nested run per family that holds its trial runs. `resume_tuning(tracking=...)` logs only the added trials and tags `automl.since_trial`; `resume_tuning_families` logs the full families again. Logging a saved result twice creates a second run. Truncated trials are counted in `automl.trials_not_logged`; the full history is always in the JSON artifact.
+
+Model: with training data available (`run_baseline`, `tune`, and `tune_families` supply it; `track_*` takes `data=ModelData(train, target, id_columns, resolved_task)`), the complete preprocessing-plus-estimator pipeline is refit on all training rows, with the best trial's parameters for tuned runs (best family for families), and logged with `mlflow.sklearn` (cloudpickle, plus an inferred signature but no input example); its URI is in `TrackingResult.model_uri` and the `automl.model_uri` tag. This refit exists for logging only and is not the Phase 14 selected-model contract. The pipeline is a pickle, so load models only from stores you trust, and set the tracking URI first (`mlflow.set_tracking_uri(...)`) because model URIs resolve through the store. LightGBM, XGBoost, CatBoost, and scikit-learn pipelines were verified. When the model is skipped (`log_model = false`, no data, or a library problem), the reason is in `TrackingResult.notes` and the `automl.notes` tag.
+
+Privacy: no data rows, predictions, sample submissions, input examples, or environment variables are logged. Logged scores are validation estimates, optimistically biased for tuned runs, and not leaderboard claims.
+
+```python
+from automl import TrackingConfig, ModelData, tune, track_tuning
+
+tracking = TrackingConfig(experiment_name="my-comp", tags={"competition": "s6ep10"})
+res = tune(df, "y", ("id",), resolved, splits, TuningConfig(n_trials=20), directory="runs/tune", tracking=tracking)
+# or later, from the saved directory (no refit unless data is given):
+out = track_tuning("runs/tune", tracking, data=ModelData(df, "y", ("id",), resolved))
+out.run_id, out.child_run_ids, out.model_uri
+```
+
+```toml
+[tracking]
+experiment_name = "my-comp"
+max_trials_logged = 100
+[tracking.tags]
+owner = "me"
+```
+
+Browse a local store with `mlflow ui --backend-store-uri sqlite:///runs/tune/mlflow.db`.
 
 ## EDA Summary
 

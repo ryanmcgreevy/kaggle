@@ -61,6 +61,16 @@ class TuningUnavailableError(TuningError):
     """The optional Optuna dependency is not installed."""
 
 
+class TrackingError(DataContractError):
+    """Tracking settings, destination, or an MLflow operation failed; local results are unaffected."""
+
+    _header = "Tracking problems:"
+
+
+class TrackingUnavailableError(TrackingError):
+    """The optional MLflow dependency is not installed."""
+
+
 class ReportError(DataContractError):
     """Report settings, inputs, or output location are invalid."""
 
