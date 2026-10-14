@@ -263,8 +263,8 @@ max_leaf_nodes = 31
 ```
 
 - Direction (maximize or minimize) comes from the metric and is recorded in the result. The sampler is `TPESampler(seed=seed)`; on CPU with a fixed seed, data, splits, and library versions, trials repeat. Runs bounded by `timeout_seconds` do not repeat, and a running trial is never interrupted, so overrun is at most one trial (reported in `budgets`).
-- Search space: a mapping `{name: {"type": "float"|"int"|"categorical", "low", "high", "log", "step", "choices"}}`, or a callable `fn(trial) -> dict` of estimator parameters. Only `hist_gradient_boosting` has a built-in space (used when `space` is omitted); other estimators require `space` until per-family spaces arrive. Parameters are merged over `estimator_params`; controlled keys (seed, threads, device, verbosity, early stopping, categorical settings) and keys fixed in `estimator_params` are rejected.
-- A trial that raises is recorded as `failed` with its reason and the study continues; failed and pruned trials are never best. If no trial completes, `TuningError` summarizes the reasons. Pruned trials keep the fold scores computed before pruning.
+- Search space: a mapping `{name: {"type": "float"|"int"|"categorical", "low", "high", "log", "step", "choices"}}`, or a callable `fn(trial) -> dict` of estimator parameters. Each estimator family has a documented built-in space (used when `space` is omitted; see Model-Family Search Spaces). Parameters are merged over `estimator_params`; controlled keys (seed, threads, device, verbosity, early stopping, categorical settings) and keys fixed in `estimator_params` are rejected.
+- A trial that raises is recorded as `failed` with its reason and a `failure_category` (`invalid_parameter`, `library_error`, `timeout`, `non_finite_score`, or `other`) and the study continues; failed and pruned trials are never best. If no trial completes, `TuningError` summarizes the reasons. Pruned trials keep the fold scores computed before pruning.
 - Scores are search-selected validation means and are optimistically biased; they are not leaderboard claims. Final refit and prediction are later phases.
 
 ```python
@@ -281,7 +281,50 @@ result = resume_tuning("runs/tuning", bundle.train, cfg.target, cfg.id_columns, 
 result = load_tuning("runs/tuning")        # reads tuning.json only; no Optuna needed
 ```
 
-Artifact directory (created by `directory=`; an existing directory is refused): `study.db` (Optuna SQLite storage) and `tuning.json` (`schema_version` 1: `task`, `metric`, `config`, `space`, `fingerprint`, `budgets` (one entry per run), `best_trial`, `trials` with `number`/`state`/`params`/`score`/`fold_scores`/`fold_std`/`duration_seconds`/`failure_reason`, `versions`, `notes`). No training data is stored, nothing leaves the directory, and no network access is used. `resume_tuning` adds trials to the same study; its `n_trials`/`timeout_seconds` budget applies to the new trials only. It checks a fingerprint (rows, features, target, metric, estimator, seed, fixed parameters, preprocessing, and a hash of the split indices) and raises `TuningError` naming any difference. Mapping spaces are saved and reused; a callable space is not serializable and must be passed again. A resumed study reseeds the sampler as `seed + number of existing trials`. No CLI command exists for this phase.
+Artifact directory (created by `directory=`; an existing directory is refused): `study.db` (Optuna SQLite storage) and `tuning.json` (`schema_version` 2; schema 1 files still load, with failed trials categorized `other`: `task`, `metric`, `config`, `space`, `fingerprint`, `budgets` (one entry per run), `best_trial`, `trials` with `number`/`state`/`params`/`score`/`fold_scores`/`fold_std`/`duration_seconds`/`failure_reason`/`failure_category`, `versions`, `notes`). No training data is stored, nothing leaves the directory, and no network access is used. `resume_tuning` adds trials to the same study; its `n_trials`/`timeout_seconds` budget applies to the new trials only. It checks a fingerprint (rows, features, target, metric, estimator, seed, fixed parameters, preprocessing, and a hash of the split indices) and raises `TuningError` naming any difference. Mapping spaces are saved and reused; a callable space is not serializable and must be passed again. A resumed study reseeds the sampler as `seed + number of existing trials`. No CLI command exists for this phase.
+
+## Model-Family Search Spaces
+
+Every estimator family has a documented, task-aware search space, so `tune` works without a supplied `space`. `get_search_space(family, task)` returns the mapping and `describe_search_space(family, task)` lists parameters; both work without Optuna or the boosting libraries. Ranges are conventional starting points, not claimed optimal. The multiclass ceiling on rounds is 200 instead of 300 because cost grows with the number of classes. Controlled keys (seed, threads, device, verbosity, early stopping) are never sampled.
+
+| Family | Parameters (log scale marked `log`) |
+|---|---|
+| `hist_gradient_boosting` | `learning_rate` 0.01-0.3 log, `max_iter` 20-300, `max_leaf_nodes` 8-63, `max_depth` 3-12, `min_samples_leaf` 5-40, `l2_regularization` 1e-8-10 log |
+| `lightgbm` | `learning_rate` log, `n_estimators` 20-300, `num_leaves` 8-128, `max_depth` 3-12, `min_child_samples` 5-50, `subsample` 0.5-1, `subsample_freq` fixed 1 (LightGBM ignores `subsample` otherwise), `colsample_bytree` 0.5-1, `reg_alpha`/`reg_lambda` 1e-8-10 log |
+| `xgboost` | `learning_rate` log, `n_estimators` 20-300, `max_depth` 2-10, `min_child_weight` 1-10, `subsample` 0.5-1, `colsample_bytree` 0.5-1, `gamma` 1e-8-5 log, `reg_alpha`/`reg_lambda` 1e-8-10 log |
+| `catboost` | `learning_rate` log, `iterations` 20-300, `depth` 3-8, `l2_leaf_reg` 1-10 log, `random_strength` 1e-3-10 log |
+
+Range overrides adjust an existing parameter (`low`, `high`, `log`, `step`, `choices`), drop it (`enabled = false`), or pin it (`fixed = value`). Unknown families, parameters, or keys and invalid bounds raise `TuningError` naming the override. Overrides cannot be combined with a supplied `space` for the same family. The effective space is recorded in each `tuning.json`.
+
+`tune_families` runs one seeded study per family on identical splits and ranks the best trials by the metric direction. `families` defaults to `config.families`, then to all installed families; a requested family whose library is missing raises its install hint. Each family's budget comes from the `budgets` argument, then `[tuning.budgets.<family>]`, then the shared `n_trials`/`timeout_seconds`; a family with no budget is rejected before any work. `config.estimator_params` apply only to `config.estimator`. A family whose trials all fail is recorded as `failed` and does not stop the others; `TuningError` is raised only if every family fails.
+
+```toml
+[tuning]
+n_trials = 20                        # shared default budget
+families = ["lightgbm", "xgboost"]
+[tuning.budgets.xgboost]             # per-family budget
+timeout_seconds = 120
+[tuning.spaces.lightgbm.learning_rate]
+low = 0.05
+high = 0.2
+[tuning.spaces.lightgbm.reg_alpha]
+enabled = false
+```
+
+```python
+from automl import TuningConfig, tune_families, load_tuning_families, resume_tuning_families
+
+res = tune_families(
+    bundle.train, cfg.target, cfg.id_columns, resolved, splits, cfg.tuning_config or TuningConfig(n_trials=20),
+    families=["lightgbm", "xgboost"], budgets={"xgboost": {"timeout_seconds": 120}},
+    preprocessing_config=cfg.preprocessing_config, directory="runs/families",   # new directory
+)
+res.best_family, res.comparison           # ranked rows: best_score, best_fold_std, trial_counts, failure_categories, best_params
+res = load_tuning_families("runs/families")   # no Optuna needed
+res = resume_tuning_families("runs/families", bundle.train, cfg.target, cfg.id_columns, resolved, splits, n_trials=10)
+```
+
+Artifacts: `<directory>/<family>/` holds the single-study `study.db` and `tuning.json`; `<directory>/tuning_families.json` (`schema_version` 1) holds `task`, `metric`, `config`, `budget_plan` (written before any trial runs), `families` (status, directory, error), `comparison`, `best_family`, and `notes`. An existing directory is refused. Family scores are search-selected validation means, optimistically biased, and are not leaderboard claims. No CLI command exists for this phase.
 
 ## EDA Summary
 

@@ -16,6 +16,13 @@ from automl.errors import (
     ValidationSplitError,
 )
 from automl.estimators import estimator_available, get_estimator_spec, list_estimators, resolve_device
+from automl.families import (
+    FamiliesResult,
+    FamilyOutcome,
+    load_tuning_families,
+    resume_tuning_families,
+    tune_families,
+)
 from automl.loader import DataBundle, load_data
 from automl.metrics import Metric, Task, get_metric, list_metrics, register_metric
 from automl.preprocessing import (
@@ -36,7 +43,16 @@ from automl.task import (
     suggest_metric,
     suggest_task,
 )
-from automl.tuning import TrialRecord, TuningConfig, TuningResult, load_tuning, resume_tuning, tune
+from automl.tuning import (
+    TrialRecord,
+    TuningConfig,
+    TuningResult,
+    categorize_failure,
+    load_tuning,
+    resume_tuning,
+    tune,
+)
+from automl.search_spaces import SPACE_FAMILIES, describe_search_space, get_search_space
 from automl.validation import Split, SplitResult, ValidationConfig, load_splits, make_splits, save_splits
 
 __all__ = [
@@ -51,6 +67,8 @@ __all__ = [
     "EdaError",
     "EdaResult",
     "EstimatorUnavailableError",
+    "FamiliesResult",
+    "FamilyOutcome",
     "Finding",
     "Metric",
     "PreprocessingConfig",
@@ -59,6 +77,7 @@ __all__ = [
     "ReportError",
     "ReportResult",
     "ResolvedTask",
+    "SPACE_FAMILIES",
     "Split",
     "SplitResult",
     "Suggestion",
@@ -73,9 +92,12 @@ __all__ = [
     "ValidationConfig",
     "ValidationSplitError",
     "build_preprocessor",
+    "categorize_failure",
+    "describe_search_space",
     "estimator_available",
     "fit_transform_fold",
     "get_estimator_spec",
+    "get_search_space",
     "get_metric",
     "infer_columns",
     "list_estimators",
@@ -87,11 +109,13 @@ __all__ = [
     "load_plan",
     "load_splits",
     "load_tuning",
+    "load_tuning_families",
     "make_splits",
     "register_metric",
     "resolve_device",
     "resolve_task_metric",
     "resume_tuning",
+    "resume_tuning_families",
     "run_baseline",
     "save_baseline",
     "save_eda",
@@ -103,5 +127,6 @@ __all__ = [
     "summarize",
     "summarize_bundle",
     "tune",
+    "tune_families",
     "write_eda_report",
 ]

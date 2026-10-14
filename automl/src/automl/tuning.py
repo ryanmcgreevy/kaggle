@@ -16,11 +16,21 @@ from sklearn.pipeline import Pipeline
 
 from automl.baseline import BaselineConfig, _plain, _run_fold, _versions
 from automl.errors import BaselineError, TuningError, TuningUnavailableError
-from automl.estimators import FeatureLayout, controlled_param_problems, get_estimator_spec, resolve_device
+from automl.estimators import (
+    ESTIMATOR_NAMES,
+    FeatureLayout,
+    controlled_param_problems,
+    get_estimator_spec,
+    resolve_device,
+)
+from automl.metrics import Task
 from automl.preprocessing import PreprocessingConfig, build_preprocessor, infer_columns
+from automl.search_spaces import SPACE_FAMILIES, apply_overrides, get_search_space
 from automl.validation import SplitResult
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
+READABLE_VERSIONS = (1, 2)
+FAILURE_CATEGORIES = ("invalid_parameter", "library_error", "timeout", "non_finite_score", "other")
 STUDY_NAME = "automl-tuning"
 STUDY_FILE = "study.db"
 RESULT_FILE = "tuning.json"
@@ -28,16 +38,13 @@ PRUNER_STARTUP_TRIALS = 3
 
 SearchSpace = dict[str, dict[str, Any]] | Callable[[Any], dict[str, Any]]
 
-# Used only when no space is supplied; per-family spaces arrive with Phase 11.
-BUILTIN_SPACES: dict[str, dict[str, dict[str, Any]]] = {
-    "hist_gradient_boosting": {
-        "learning_rate": {"type": "float", "low": 0.01, "high": 0.3, "log": True},
-        "max_iter": {"type": "int", "low": 20, "high": 200},
-        "max_leaf_nodes": {"type": "int", "low": 8, "high": 63},
-        "min_samples_leaf": {"type": "int", "low": 5, "high": 40},
-        "l2_regularization": {"type": "float", "low": 1e-8, "high": 10.0, "log": True},
-    }
-}
+def _budget_problems(n: Any, t: Any, where: str = "") -> list[str]:
+    problems: list[str] = []
+    if n is not None and (isinstance(n, bool) or not isinstance(n, int) or n < 1):
+        problems.append(f"setting '{where}n_trials' must be an integer of at least 1, got {n!r}")
+    if t is not None and (isinstance(t, bool) or not isinstance(t, (int, float)) or not t > 0):
+        problems.append(f"setting '{where}timeout_seconds' must be a positive number, got {t!r}")
+    return problems
 
 
 @dataclass(frozen=True)
@@ -51,16 +58,57 @@ class TuningConfig:
     estimator_params: dict[str, Any] = field(default_factory=dict)
     native_categoricals: bool | None = None
     device: str = "cpu"
+    # Multi-family settings (used by tune_families): families to tune, per-family budgets, range overrides.
+    families: tuple[str, ...] | None = None
+    budgets: dict[str, dict[str, Any]] = field(default_factory=dict)
+    spaces: dict[str, dict[str, dict[str, Any]]] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         problems: list[str] = []
         n, t = self.n_trials, self.timeout_seconds
-        if n is not None and (isinstance(n, bool) or not isinstance(n, int) or n < 1):
-            problems.append(f"setting 'n_trials' must be an integer of at least 1, got {n!r}")
-        if t is not None and (isinstance(t, bool) or not isinstance(t, (int, float)) or not t > 0):
-            problems.append(f"setting 'timeout_seconds' must be a positive number, got {t!r}")
+        problems += _budget_problems(n, t)
+        families = self.families
+        if families is not None:
+            if isinstance(families, str) or not isinstance(families, (list, tuple)) or not families:
+                problems.append("setting 'families' must be a non-empty list of estimator names")
+                families = None
+            elif len(set(families)) != len(families):
+                problems.append("setting 'families' has duplicate entries")
+            else:
+                bad = [f for f in families if f not in ESTIMATOR_NAMES]
+                if bad:
+                    problems.append(f"setting 'families' has unknown estimators {bad}; valid: {list(ESTIMATOR_NAMES)}")
+        if not isinstance(self.budgets, dict):
+            problems.append("setting 'budgets' must be a table of per-family budgets")
+        else:
+            for fam, b in self.budgets.items():
+                if fam not in ESTIMATOR_NAMES:
+                    problems.append(f"setting 'budgets' has unknown estimator {fam!r}; valid: {list(ESTIMATOR_NAMES)}")
+                elif not isinstance(b, dict) or set(b) - {"n_trials", "timeout_seconds"}:
+                    problems.append(f"setting 'budgets.{fam}' must be a table with 'n_trials' and/or 'timeout_seconds'")
+                else:
+                    problems += _budget_problems(b.get("n_trials"), b.get("timeout_seconds"), f"budgets.{fam}.")
+                    if b.get("n_trials") is None and b.get("timeout_seconds") is None:
+                        problems.append(f"setting 'budgets.{fam}' needs 'n_trials' and/or 'timeout_seconds'")
         if n is None and t is None:
-            problems.append("set 'n_trials' and/or 'timeout_seconds'; a tuning run needs a budget")
+            covered = families is not None and isinstance(self.budgets, dict) and all(f in self.budgets for f in families)
+            if not covered:
+                problems.append("set 'n_trials' and/or 'timeout_seconds'; a tuning run needs a budget")
+        if not isinstance(self.spaces, dict):
+            problems.append("setting 'spaces' must be a table of per-family range overrides")
+        else:
+            for fam, ov in self.spaces.items():
+                if fam not in SPACE_FAMILIES:
+                    problems.append(f"setting 'spaces' has unknown estimator {fam!r}; valid: {list(SPACE_FAMILIES)}")
+                    continue
+                if not isinstance(ov, dict):
+                    problems.append(f"setting 'spaces.{fam}' must be a table of per-parameter overrides")
+                    continue
+                for task in Task:
+                    try:
+                        _validate_mapping(apply_overrides(fam, get_search_space(fam, task), ov))
+                    except TuningError as exc:
+                        problems += [p for p in exc.problems if p not in problems]
         if not isinstance(self.pruning, bool):
             problems.append("setting 'pruning' must be true or false")
         try:
@@ -78,6 +126,9 @@ class TuningConfig:
         if problems:
             raise TuningError(problems)
         object.__setattr__(self, "estimator_params", dict(self.estimator_params))
+        object.__setattr__(self, "families", tuple(self.families) if self.families is not None else None)
+        object.__setattr__(self, "budgets", json.loads(json.dumps(self.budgets)))
+        object.__setattr__(self, "spaces", json.loads(json.dumps(self.spaces)))
 
 
 TUNING_KEYS = {f.name for f in fields(TuningConfig)}
@@ -93,6 +144,7 @@ class TrialRecord:
     fold_std: float | None
     duration_seconds: float | None
     failure_reason: str | None = None
+    failure_category: str | None = None
 
 
 @dataclass(frozen=True, eq=False)
@@ -189,26 +241,31 @@ def _mapping_sampler(space: dict[str, dict[str, Any]]) -> Callable[[Any], dict[s
 
 
 def _resolve_space(
-    space: SearchSpace | None, config: TuningConfig, stored: dict[str, Any] | None = None
+    space: SearchSpace | None,
+    config: TuningConfig,
+    task: Task,
+    stored: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any], Callable[[Any], dict[str, Any]]]:
     """Return the serializable space description and its sampling function."""
+    overrides = config.spaces.get(config.estimator)
     if space is None and stored is not None:
         if stored["kind"] == "callable":
             raise TuningError("the saved study used a callable search space; pass it again as 'space'")
         space = stored["spec"]
-    if space is None:
-        space = BUILTIN_SPACES.get(config.estimator)
-        if space is None:
-            raise TuningError(
-                f"no built-in search space for estimator '{config.estimator}'; pass 'space' "
-                "(per-family spaces arrive in a later phase)"
-            )
+        kind = stored["kind"]
+    elif space is None:
+        space = get_search_space(config.estimator, task, overrides)
         kind = "builtin"
-    elif callable(space):
-        return {"kind": "callable", "spec": None}, space
-    elif isinstance(space, dict):
-        kind = "mapping"
     else:
+        kind = "mapping"
+        if overrides:
+            raise TuningError(
+                f"'spaces' overrides for '{config.estimator}' cannot be combined with a supplied search space; "
+                "edit the supplied space instead"
+            )
+    if callable(space):
+        return {"kind": "callable", "spec": None}, space
+    if not isinstance(space, dict):
         raise TuningError("'space' must be a mapping of parameter specs or a callable taking an Optuna trial")
     spec = _validate_mapping(space)
     problems = controlled_param_problems(spec)
@@ -333,7 +390,41 @@ def _record(ft: Any) -> TrialRecord:
         fold_std=float(np.std(folds)) if done and folds else None,
         duration_seconds=duration,
         failure_reason=ft.user_attrs.get("failure_reason"),
+        failure_category=ft.user_attrs.get("failure_category") or ("other" if state == "failed" else None),
     )
+
+
+class _NonFiniteScore(Exception):
+    pass
+
+
+class NoCompletedTrials(TuningError):
+    """Every trial of a study failed or was pruned."""
+
+
+_LIBRARY_PACKAGES = ("lightgbm", "xgboost", "catboost", "_catboost")
+
+
+def categorize_failure(exc: BaseException) -> str:
+    """Map a trial exception to one of FAILURE_CATEGORIES."""
+    if isinstance(exc, _NonFiniteScore):
+        return "non_finite_score"
+    if isinstance(exc, TimeoutError):
+        return "timeout"
+    text = str(exc).lower()
+    if isinstance(exc, BaselineError):
+        if "non-finite" in text:
+            return "non_finite_score"
+        return "invalid_parameter" if "does not accept" in text or "cannot set" in text else "other"
+    if isinstance(exc, TuningError):
+        return "invalid_parameter"
+    if type(exc).__name__ == "InvalidParameterError":
+        return "invalid_parameter"
+    if type(exc).__module__.split(".")[0] in _LIBRARY_PACKAGES:
+        return "library_error"
+    if isinstance(exc, (ValueError, TypeError)) and "param" in text:
+        return "invalid_parameter"
+    return "other"
 
 
 def _run(optuna, study, setup: _Setup, sampler_fn, n_trials, timeout) -> dict[str, Any]:
@@ -353,11 +444,14 @@ def _run(optuna, study, setup: _Setup, sampler_fn, n_trials, timeout) -> dict[st
                 raise TuningError("a callable search space must return a dict of estimator parameters")
             trial.set_user_attr("params", _plain(params))
             scores = _evaluate(setup, params, on_fold)
+            if not all(np.isfinite(scores)):
+                raise _NonFiniteScore("a fold score is not finite")
         except optuna.TrialPruned:
             raise
         except Exception as exc:
             line = (str(exc).strip().splitlines() or [""])[0][:300]
             trial.set_user_attr("failure_reason", f"{type(exc).__name__}: {line}")
+            trial.set_user_attr("failure_category", categorize_failure(exc))
             raise
         return float(np.mean(scores))
 
@@ -413,7 +507,7 @@ def _finish(result: TuningResult) -> TuningResult:
     if result.best is None:
         states = [t.state for t in result.trials]
         reasons = sorted({t.failure_reason for t in result.trials if t.failure_reason})[:5]
-        raise TuningError(
+        raise NoCompletedTrials(
             [f"no trial completed ({states.count('failed')} failed, {states.count('pruned')} pruned)"]
             + [f"trial failure: {r}" for r in reasons]
         )
@@ -433,9 +527,11 @@ def tune(
 ) -> TuningResult:
     """Tune one estimator with mean validation score over `splits`; persists to `directory` if given."""
     optuna = _require_optuna()
+    if config.n_trials is None and config.timeout_seconds is None:
+        raise TuningError("set 'n_trials' and/or 'timeout_seconds'; tune needs a budget (use tune_families for per-family budgets)")
     prep_cfg = preprocessing_config or PreprocessingConfig(encoder="ordinal", seed=config.seed)
     setup = _prepare(train, target, id_columns, resolved_task, splits, config, prep_cfg)
-    space_desc, sampler_fn = _resolve_space(space, config)
+    space_desc, sampler_fn = _resolve_space(space, config, setup.task)
     storage = None
     path = None
     if directory is not None:
@@ -485,7 +581,7 @@ def resume_tuning(
     ]
     if diffs:
         raise TuningError(["data or configuration does not match the saved study"] + diffs)
-    space_desc, sampler_fn = _resolve_space(space, config, saved.space)
+    space_desc, sampler_fn = _resolve_space(space, config, setup.task, saved.space)
     storage = f"sqlite:///{(path / STUDY_FILE).resolve()}"
     try:
         study = optuna.load_study(study_name=STUDY_NAME, storage=storage)
@@ -544,12 +640,19 @@ def load_tuning(directory: str | Path) -> TuningResult:
         raise bad(f"{RESULT_FILE} not found") from None
     except json.JSONDecodeError as exc:
         raise bad(f"{RESULT_FILE} is not valid JSON: {exc}") from None
-    if not isinstance(raw, dict) or raw.get("schema_version") != SCHEMA_VERSION:
-        raise bad(f"unsupported or missing 'schema_version'; expected {SCHEMA_VERSION}")
+    if not isinstance(raw, dict) or raw.get("schema_version") not in READABLE_VERSIONS:
+        raise bad(f"unsupported or missing 'schema_version'; expected one of {list(READABLE_VERSIONS)}")
     try:
         config = TuningConfig(**raw["config"])
         trials = tuple(
-            TrialRecord(**{**t, "fold_scores": tuple(t["fold_scores"])}) for t in raw["trials"]
+            TrialRecord(
+                **{
+                    **t,
+                    "fold_scores": tuple(t["fold_scores"]),
+                    "failure_category": t.get("failure_category") or ("other" if t["state"] == "failed" else None),
+                }
+            )
+            for t in raw["trials"]
         )
         best_no = raw["best_trial"]
         best = next((t for t in trials if t.number == best_no), None) if best_no is not None else None
