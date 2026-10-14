@@ -182,9 +182,13 @@ When identifiers are available, predictions must remain aligned to the correspon
 
 ## Phase 17: Agent Guidance Consolidation
 
+**Status:** Complete (2026-10-14); automatic skill discovery remains unverified (see Phase 6).
+
 **Deliverable:** Extend the MVP's `automl/AGENTS.md` router and data/split/EDA skills with full workflow and safety guidance; add focused skills for stable model/tuning and reporting/submission capabilities.
 
 **Acceptance:** Each skill states invocation conditions, inputs, outputs, assumptions, limits, and validation steps; an agent can follow the guidance to compose implemented stages through the documented Python API or CLI without undocumented state or credentials. This phase consolidates and checks guidance; it is not the first point at which capabilities become agent-usable.
+
+**Verification:** With all extras in the project-local `.venv`, `pip check` and the full suite passed (1 GPU test skipped). New `tests/test_agent_guidance.py` checks frontmatter, folder/name match, required headings, `AGENTS.md` routing and rules, that every documented `automl` command, option, and API name exists, and a socket-blocked walkthrough that runs the `automl-workflow` command block on synthetic CSVs and checks each skill's documented artifact names, plus the `run` layout. Added skills: `automl-workflow`, `automl-baseline`, `automl-tuning`, `automl-model-report`, `automl-refit`, `automl-submission`; the three existing skills were revised to the same headings. `AGENTS.md` now restricts agents to the existing tools and requires user approval before new code or hand edits. No package behavior or dependency changed. The clean-environment run (only the `test` extra) was not repeated.
 
 ## Phase 18: Optional PyTorch Estimator
 
