@@ -130,9 +130,13 @@ Stages should return structured results and persist machine-readable artifacts w
 
 ## Phase 12: Optional MLflow Tracking
 
+**Status:** Complete (2026-10-14).
+
 **Deliverable:** Tracking adapter that mirrors run configuration, metrics, trial history, and complete fitted pipelines to MLflow when explicitly enabled.
 
 **Acceptance:** Local runs still pass with MLflow absent. An integration test against a local MLflow tracking URI verifies a run can be logged and queried; no hosted service is required.
+
+**Verification:** Installed the optional `mlflow` extra (MLflow 3.17.1) with the `tuning` and `boosting` extras into the project-local `.venv`; `pip check` and all 443 tests passed (1 GPU test skipped). Tests cover `TrackingConfig` and `[tracking]` TOML errors, destination resolution and URI credential redaction, `import automl` not loading MLflow, the install hint before any work when MLflow is blocked, baseline, tuning, and families runs logged to a local SQLite store and queried back (params, metrics, tags, nested trial runs, artifacts equal to the saved JSON), the trial cap keeping the best trial, failed trials tagged and never best, post-hoc logging from saved directories, resume logging only new trials, the logged pipeline reloading and reproducing predictions, no raw data in logged content, unreachable-store errors leaving local results intact, and no RUNNING run left after a mid-run failure. LightGBM, XGBoost, and CatBoost pipelines were also logged and verified. The extra is `mlflow>=3.0`; no core dependency and no CLI behavior was added. Deviations from the spec: `enabled` defaults to true (passing a `TrackingConfig` is the explicit opt-in); `tracking` is accepted by `run_baseline`, `tune`, `resume_tuning`, `tune_families`, and `resume_tuning_families` rather than by `save_baseline`; and models are logged as cloudpickle because MLflow 3's default skops format rejects third-party estimator types.
 
 ## Phase 13: Best-Model Results PDF
 

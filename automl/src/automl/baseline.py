@@ -196,13 +196,19 @@ def run_baseline(
     splits: SplitResult,
     config: BaselineConfig | None = None,
     preprocessing_config: PreprocessingConfig | None = None,
+    tracking: Any = None,
 ) -> BaselineResult:
     """Fit one pipeline per split with the selected estimator and score validation rows with the resolved metric.
 
     Preprocessing is fit inside each fold. `preprocessing_config=None` uses ordinal encoding, which
     native categorical handling (the default for LightGBM, XGBoost, and CatBoost) replaces.
+    A `TrackingConfig` passed as `tracking` mirrors the result to MLflow; its destination must be explicit.
     """
     cfg = config or BaselineConfig()
+    if tracking is not None and tracking.enabled:
+        from automl.tracking import _require_mlflow
+
+        _require_mlflow()
     prep_cfg = preprocessing_config or PreprocessingConfig(encoder="ordinal", seed=cfg.seed)
     task, metric = resolved_task.task, resolved_task.metric
     problems: list[str] = []
@@ -253,7 +259,7 @@ def run_baseline(
     scores = np.array([f.score for f in folds])
     sc = splits.config
     est_name, est_params = describe_estimator(estimator)
-    return BaselineResult(
+    result = BaselineResult(
         task=task,
         metric=metric.name,
         direction=metric.direction,
@@ -287,6 +293,14 @@ def run_baseline(
             "note": "GPU training is not guaranteed to be bit-reproducible" if choice.effective == "gpu" else None,
         },
     )
+    if tracking is not None and tracking.enabled:
+        from automl.tracking import ModelData, track_baseline
+
+        track_baseline(
+            result, tracking, data=ModelData(train, target, tuple(id_columns), resolved_task),
+            preprocessing_config=prep_cfg,
+        )
+    return result
 
 
 def _plain(params: dict[str, Any]) -> dict[str, Any]:

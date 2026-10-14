@@ -23,6 +23,7 @@ from automl.tuning import (
     TuningResult,
     _budget_problems,
     _require_optuna,
+    _require_tracking,
     _resolve_space,
     load_tuning,
     resume_tuning,
@@ -185,6 +186,7 @@ def tune_families(
     spaces: dict[str, SearchSpace] | None = None,
     preprocessing_config: PreprocessingConfig | None = None,
     directory: str | Path | None = None,
+    tracking: Any = None,
 ) -> FamiliesResult:
     """Run one seeded study per family on identical splits and rank the best trials.
 
@@ -193,6 +195,7 @@ def tune_families(
     then the shared `n_trials`/`timeout_seconds`. `config.estimator_params` apply to `config.estimator` only.
     """
     _require_optuna()
+    _require_tracking(tracking)
     requested = tuple(families) if families is not None else config.families
     if requested is None:
         chosen = tuple(f for f in ESTIMATOR_NAMES if estimator_available(f))
@@ -230,9 +233,22 @@ def tune_families(
         except NoCompletedTrials as exc:
             res = load_tuning(parent / f) if parent and (parent / f / RESULT_FILE).is_file() else None
             outcomes.append(FamilyOutcome(f, "failed", plan[f], res, "; ".join(exc.problems)))
-    return _finalize(
+    result = _finalize(
         config, resolved_task.task.value, resolved_task.metric.name, resolved_task.metric.direction,
         plan, tuple(outcomes), parent,
+    )
+    _track(tracking, result, train, target, id_columns, resolved_task, preprocessing_config)
+    return result
+
+
+def _track(tracking, result, train, target, id_columns, resolved_task, preprocessing_config) -> None:
+    if tracking is None or not tracking.enabled:
+        return
+    from automl.tracking import ModelData, track_families
+
+    track_families(
+        result, tracking, data=ModelData(train, target, tuple(id_columns), resolved_task),
+        preprocessing_config=preprocessing_config,
     )
 
 
@@ -284,9 +300,11 @@ def resume_tuning_families(
     families: list[str] | tuple[str, ...] | None = None,
     spaces: dict[str, SearchSpace] | None = None,
     preprocessing_config: PreprocessingConfig | None = None,
+    tracking: Any = None,
 ) -> FamiliesResult:
     """Add trials to the saved per-family studies; budgets apply to the new trials only."""
     _require_optuna()
+    _require_tracking(tracking)
     directory = Path(directory)
     saved = load_tuning_families(directory)
     available = [o.family for o in saved.outcomes if (directory / o.family / STUDY_FILE).is_file()]
@@ -308,4 +326,6 @@ def resume_tuning_families(
             done[f] = FamilyOutcome(f, "failed", plan[f], load_tuning(directory / f), "; ".join(exc.problems))
     ordered = tuple(done[o.family] for o in saved.outcomes)
     stored_plan = {o.family: o.budget for o in ordered}
-    return _finalize(saved.config, saved.task, saved.metric, saved.direction, stored_plan, ordered, directory)
+    result = _finalize(saved.config, saved.task, saved.metric, saved.direction, stored_plan, ordered, directory)
+    _track(tracking, result, train, target, id_columns, resolved_task, preprocessing_config)
+    return result
