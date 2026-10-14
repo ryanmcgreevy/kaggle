@@ -41,6 +41,12 @@ class PreprocessingError(DataContractError):
     _header = "Preprocessing problems:"
 
 
+class BaselineError(DataContractError):
+    """Baseline settings, inputs, or result artifacts are invalid."""
+
+    _header = "Baseline problems:"
+
+
 class ReportError(DataContractError):
     """Report settings, inputs, or output location are invalid."""
 

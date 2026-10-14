@@ -252,10 +252,8 @@ def fit_transform_fold(
     return np.asarray(train_t), np.asarray(valid_t)
 
 
-def save_plan(plan: ColumnPlan, config: PreprocessingConfig, path: str | Path) -> None:
-    """Write the preprocessing plan as JSON; refuses to overwrite an existing file."""
-    path = Path(path)
-    payload = {
+def plan_to_dict(plan: ColumnPlan, config: PreprocessingConfig) -> dict[str, Any]:
+    return {
         "schema_version": ARTIFACT_VERSION,
         "config": {f.name: _jsonable(getattr(config, f.name)) for f in fields(config)},
         "numeric": list(plan.numeric),
@@ -264,9 +262,14 @@ def save_plan(plan: ColumnPlan, config: PreprocessingConfig, path: str | Path) -
         "excluded": list(plan.excluded),
         "reasons": dict(plan.reasons),
     }
+
+
+def save_plan(plan: ColumnPlan, config: PreprocessingConfig, path: str | Path) -> None:
+    """Write the preprocessing plan as JSON; refuses to overwrite an existing file."""
+    path = Path(path)
     try:
         with path.open("x") as f:
-            json.dump(payload, f, indent=2)
+            json.dump(plan_to_dict(plan, config), f, indent=2)
     except FileExistsError:
         raise PreprocessingError(f"preprocessing plan {path} already exists; choose a new path") from None
 
@@ -284,25 +287,29 @@ def load_plan(path: str | Path) -> tuple[ColumnPlan, PreprocessingConfig]:
         raise PreprocessingError(f"preprocessing plan not found: {path}") from None
     except json.JSONDecodeError as exc:
         raise PreprocessingError(f"preprocessing plan {path} is not valid JSON: {exc}") from None
+    return plan_from_dict(raw, f"preprocessing plan {path}")
+
+
+def plan_from_dict(raw: Any, label: str) -> tuple[ColumnPlan, PreprocessingConfig]:
+    """Validate a plan payload; `label` prefixes error messages."""
 
     def bad(msg: str) -> PreprocessingError:
-        return PreprocessingError(f"preprocessing plan {path}: {msg}")
+        return PreprocessingError(f"{label}: {msg}")
 
     if not isinstance(raw, dict) or raw.get("schema_version") != ARTIFACT_VERSION:
         raise bad(f"unsupported or missing 'schema_version'; expected {ARTIFACT_VERSION}")
+    cfg_raw = raw.get("config")
+    if not isinstance(cfg_raw, dict) or set(cfg_raw) - PREPROCESSING_KEYS:
+        raise bad("'config' must be a table of known preprocessing settings")
     try:
-        cfg_raw = raw["config"]
-        if not isinstance(cfg_raw, dict) or set(cfg_raw) - PREPROCESSING_KEYS:
-            raise bad("'config' must be a table of known preprocessing settings")
         config = PreprocessingConfig(**cfg_raw)
+    except PreprocessingError as exc:
+        raise bad("; ".join(exc.problems)) from None
+    try:
         groups = {k: raw[k] for k in ("numeric", "categorical", "dropped", "excluded")}
         reasons = raw["reasons"]
     except KeyError as exc:
         raise bad(f"missing field {exc}") from None
-    except PreprocessingError as exc:
-        if exc.problems and str(exc).startswith("preprocessing plan"):
-            raise
-        raise bad("; ".join(exc.problems)) from None
     for name, value in groups.items():
         if not isinstance(value, list) or not all(isinstance(c, str) for c in value):
             raise bad(f"'{name}' must be a list of column names")

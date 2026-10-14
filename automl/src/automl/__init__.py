@@ -1,8 +1,10 @@
 """Local-first tools for tabular Kaggle competitions."""
 
+from automl.baseline import BaselineConfig, BaselineResult, load_baseline, run_baseline, save_baseline
 from automl.config import DataConfig, load_config
 from automl.eda import EdaConfig, EdaResult, load_eda, save_eda, summarize, summarize_bundle
 from automl.errors import (
+    BaselineError,
     DataContractError,
     EdaError,
     PreprocessingError,
@@ -33,6 +35,9 @@ from automl.task import (
 from automl.validation import Split, SplitResult, ValidationConfig, load_splits, make_splits, save_splits
 
 __all__ = [
+    "BaselineConfig",
+    "BaselineError",
+    "BaselineResult",
     "ColumnPlan",
     "DataBundle",
     "DataConfig",
@@ -61,6 +66,7 @@ __all__ = [
     "get_metric",
     "infer_columns",
     "list_metrics",
+    "load_baseline",
     "load_config",
     "load_data",
     "load_eda",
@@ -69,6 +75,8 @@ __all__ = [
     "make_splits",
     "register_metric",
     "resolve_task_metric",
+    "run_baseline",
+    "save_baseline",
     "save_eda",
     "save_plan",
     "save_splits",
