@@ -172,9 +172,13 @@ When identifiers are available, predictions must remain aligned to the correspon
 
 ## Phase 16: End-to-End CLI
 
+**Status:** Complete (2026-10-14).
+
 **Deliverable:** Compose the implemented stages into documented CLI commands for inspection, EDA, baseline, tuning, reporting, and submission generation.
 
 **Acceptance:** A no-network synthetic-data smoke test runs the full local path from CSV inputs to both PDFs and a schema-validated submission; each stage can also be invoked independently.
+
+**Verification:** With the `reports`, `tuning`, `boosting`, and `mlflow` extras in the project-local `.venv`, `pip check`, CLI help, and all 571 tests passed (1 GPU test skipped). In a clean environment with only the `test` extra, 410 passed and 114 skipped; the one failure was the editable-install source-tree check, because that environment used a non-editable install. New commands: `baseline`, `tune`, `model-report`, `refit`, `submit`, and `run`, in `src/automl/workflow.py` over the existing APIs. Tests cover each command's JSON and exit codes, optional and saved `--splits` (identical scores, mismatch rejection), required tuning budget, multi-family, single-estimator, and `--resume` tuning, refit `--label`/`--rank`, overwrite refusal and `--overwrite`, the chained `validate` to `submit` path with sockets blocked and input files byte-identical, `run` producing the same submission as the chained commands, `--skip-tuning` and `--skip-reports`, a failing `run` stage keeping earlier artifacts, missing Optuna, Matplotlib, MLflow, and boosting libraries giving install hints before any file is written, and `--track` against a local MLflow store (including `run --track`). No new dependency. Deviations from the spec: `run` has no `--overwrite` and needs a new or empty directory, because baseline, tuning, and split artifacts are never replaced; a baseline with `--track` is logged after its result directory is saved (to a configured destination, else the result directory); tuning commands report only that tracking happened, not run IDs; the GPU check was not run.
 
 ## Phase 17: Agent Guidance Consolidation
 

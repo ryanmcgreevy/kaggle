@@ -87,3 +87,9 @@ class SubmissionError(DataContractError):
     """Submission settings, inputs, schema, values, or artifacts are invalid."""
 
     _header = "Submission problems:"
+
+
+class RunError(DataContractError):
+    """A stage of the end-to-end run failed or the run directory is unusable; earlier artifacts are kept."""
+
+    _header = "Run problems:"

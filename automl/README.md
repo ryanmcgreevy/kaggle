@@ -1,6 +1,6 @@
 # AutoML
 
-Local-first tools for tabular Kaggle competitions. The package provides a Python API and an MVP CLI for validating inputs, generating validation splits, and producing EDA artifacts and reports. Modeling, tuning, prediction, and submission commands are future work.
+Local-first tools for tabular Kaggle competitions. The package provides a Python API and a CLI that run the whole local workflow: validating inputs, splits, EDA and its PDF, baseline and tuned models, the model comparison PDF, refit and prediction, and a validated submission CSV.
 
 ## Install and Test
 
@@ -19,24 +19,50 @@ python -m pytest
 Optional model libraries are installed with extras (`lightgbm`, `xgboost`, `catboost`, or `boosting` for all); adapter tests are skipped when a library is absent. Hyperparameter tuning needs the `tuning` extra (`pip install 'automl[tuning]'`, Optuna); its tests are skipped without it. MLflow tracking needs the `mlflow` extra (`pip install 'automl[mlflow]'`); its integration tests are skipped without it.
 ## CLI
 
-The CLI exposes the existing data and EDA capabilities. Successful workflow commands print a JSON result to stdout; workflow errors are printed to stderr and exit with status 1. Input paths in the TOML resolve relative to that file. Output directories are relative to the current working directory and are created when needed.
+Every command is a thin wrapper over the Python API described below; people and agents use the same commands. Successful commands print one JSON object to stdout; progress notes and errors go to stderr (`error: ...`). Exit status is 0 on success, 1 for workflow, data-contract, missing-extra, and file errors, and 2 for usage errors. Input paths in the TOML resolve relative to that file; `--output-dir` is relative to the current working directory and is created when needed. Task and metric must be set in `[task]`; the CLI never guesses them. Nothing contacts Kaggle or the network, and nothing is uploaded or submitted.
 
 ```bash
-automl --help
-python -m automl --help
 automl validate run.toml
-automl split run.toml --output-dir runs/experiment-001
-automl eda run.toml --output-dir runs/experiment-001
-automl report run.toml runs/experiment-001/eda.json --output-dir runs/experiment-001/reports
+automl split run.toml --output-dir runs/1/splits
+automl eda run.toml --output-dir runs/1/eda
+automl report run.toml runs/1/eda/eda.json --output-dir runs/1/reports
+automl baseline run.toml --output-dir runs/1/baseline --splits runs/1/splits/splits.json
+automl tune run.toml --output-dir runs/1/tuning --families hist_gradient_boosting,lightgbm --n-trials 30
+automl model-report run.toml runs/1/baseline runs/1/tuning --output-dir runs/1/reports
+automl refit run.toml runs/1/tuning --output-dir runs/1/refit
+automl submit run.toml runs/1/refit --output-dir runs/1/submission
 ```
 
-`validate` checks the TOML, CSV data contract, and explicit task/metric choices. Set both values in `[task]`; the CLI will not silently choose them. `split` writes `splits.json`, and `eda` writes `eda.json`. Both refuse to overwrite existing artifacts. `report` reads the saved EDA artifact and writes a PDF plus findings JSON; it also refuses existing outputs unless `--overwrite` is passed. PDF generation requires the optional reports extra:
+Or run every stage in one go:
 
 ```bash
-python -m pip install -e '.[reports]'
+automl run run.toml --output-dir runs/2 --n-trials 30
 ```
 
-The CLI composes the same Python APIs described below. It does not preprocess, train, tune, submit, upload data, or require network access or Kaggle credentials.
+| Command | Inputs | Writes |
+|---|---|---|
+| `validate` | TOML, CSVs | nothing; JSON with task, metric, row counts |
+| `split` | TOML, CSVs | `splits.json` |
+| `eda` | TOML, CSVs | `eda.json` |
+| `report` | TOML, `eda.json` | EDA PDF and findings JSON |
+| `baseline` | TOML, CSVs, optional `--splits`, `--estimator` | a new baseline result directory (`baseline.json`, out-of-fold predictions, fold models) |
+| `tune` | TOML, CSVs, optional `--splits`, `--estimator` or `--families`, a budget | a new tuning directory (`tuning_families.json` plus one study per family, or `tuning.json` with `--estimator`) |
+| `model-report` | TOML, one or more result directories, `--top-n` | model comparison PDF and summary JSON |
+| `refit` | TOML, CSVs, a result directory, `--label` or `--rank` | `predictions.csv`, `refit.json`, `pipeline.joblib` |
+| `submit` | TOML, CSVs, a refit directory | `submission.csv`, `submission.json` |
+| `run` | TOML, CSVs, optional `--estimator`/`--families`, budget | all of the above under `splits/ eda/ baseline/ tuning/ reports/ refit/ submission/` |
+
+Hand-off between stages is by explicit directory paths; no hidden state is used, so any stage can be rerun alone from the saved artifacts.
+
+- **Splits.** `--splits` on `baseline` and `tune` is optional. With a saved `splits.json`, every candidate uses the identical folds; without it, splits are built from `[validation]` (seeded, so identical for the same config and data) and are not saved. A file made for different data (row count or task) is rejected. `run` saves the splits once and reuses them.
+- **Tuning budget.** `tune` and `run` need `--n-trials` and/or `--timeout-seconds` (or the same keys, or per-family budgets, in `[tuning]`); there is no default budget, and the budget is printed to stderr before the study starts. `tune` covers every installed family unless `--families` or `[tuning] families` is set; skipped, not-installed families are listed with their install command. `--estimator` tunes one estimator instead. `--resume` adds trials to the study in `--output-dir`; its budget counts new trials only.
+- **Reports.** `model-report` accepts baseline, tuning, and families directories, alone or mixed. Scores are validation scores, not leaderboard claims.
+- **Selection.** `refit` and `run` use rank 1 of the given result unless `--rank` or `--label` is passed (labels appear in the `model-report` JSON). `run` refits the tuned result, or the baseline with `--skip-tuning`.
+- **Overwrite.** New baseline, tuning, split, and EDA artifacts refuse an existing path. `report`, `model-report`, `refit`, and `submit` refuse existing files unless `--overwrite`. `run` needs a new or empty `--output-dir`; if a stage fails it stops, keeps the files already written, and names the failing and completed stages.
+- **Tracking.** `--track` (on `baseline`, `tune`, `refit`, `submit`, `run`) logs to MLflow using the `[tracking]` table; without `--track` nothing is logged even if the table exists. A baseline with no `tracking_uri` or `directory` logs to its own result directory. If logging fails after local files were written, the command exits 1 and says the local results are intact.
+- **Optional extras.** A missing optional package is reported with its install command before files are written: `pip install -e '.[reports]'` (PDFs), `'.[tuning]'` (Optuna), `'.[boosting]'` or `'.[lightgbm]'`, `'.[xgboost]'`, `'.[catboost]'`, and `'.[mlflow]'`. The core install runs `validate`, `split`, `eda`, `baseline`, `refit`, and `submit` with scikit-learn estimators only; `automl --help` works without any extra.
+
+Limits: one pipeline is refit and submitted per run; `run` always uses the configured stage tables and has no interactive prompts; large searches are bounded only by their budget, so choose it deliberately. See the sections below for each stage's artifacts, assumptions, and checks.
 
 ## Input Data Contract
 
@@ -204,7 +230,7 @@ save_baseline(result, "runs/baseline")             # new directory; refuses to o
 result = load_baseline("runs/baseline")            # load_models=True only for trusted directories
 ```
 
-Artifact directory: `baseline.json` (`schema_version` 2: `task`, `metric` name/direction/needs, `estimator` name, key, and effective params, `categorical_handling`, `device`, `config`, `preprocessing` (the plan schema above), `split` summary, `prediction_kind`, `n_rows`, per-fold `score`/sizes/timings, `summary` mean and std, library `versions`, and relative `files`), `oof_predictions.csv` (`row` positional index, `fold`, and `prediction` or `proba_<class>` columns), and `models.joblib` (fitted fold pipelines, when `save_models` is true). `load_baseline` rejects malformed files, missing files, inconsistent scores, and out-of-range or duplicate rows. Joblib unpickles on load, so only load `models.joblib` from trusted sources, and expect it to work only with the library versions in `versions`. Set `save_models = false` to skip it. `load_baseline` also reads `schema_version` 1 directories. No CLI command exists for this phase.
+Artifact directory: `baseline.json` (`schema_version` 2: `task`, `metric` name/direction/needs, `estimator` name, key, and effective params, `categorical_handling`, `device`, `config`, `preprocessing` (the plan schema above), `split` summary, `prediction_kind`, `n_rows`, per-fold `score`/sizes/timings, `summary` mean and std, library `versions`, and relative `files`), `oof_predictions.csv` (`row` positional index, `fold`, and `prediction` or `proba_<class>` columns), and `models.joblib` (fitted fold pipelines, when `save_models` is true). `load_baseline` rejects malformed files, missing files, inconsistent scores, and out-of-range or duplicate rows. Joblib unpickles on load, so only load `models.joblib` from trusted sources, and expect it to work only with the library versions in `versions`. Set `save_models = false` to skip it. `load_baseline` also reads `schema_version` 1 directories. CLI: `automl baseline` (see CLI).
 
 ## Boosting Adapters
 
@@ -244,7 +270,7 @@ result = run_baseline(bundle.train, target, id_columns, resolved, splits, cfg)
 result.estimator_key, result.categorical_handling, result.device
 ```
 
-Artifact `schema_version` 2 adds `estimator.key`, `categorical_handling`, and `device`, and records the library version under `versions`. No CLI command exists for this phase.
+Artifact `schema_version` 2 adds `estimator.key`, `categorical_handling`, and `device`, and records the library version under `versions`. CLI: `--estimator` on `baseline`, `tune`, and `run`; a missing library is reported with its install command.
 
 ## Optuna Tuning
 
@@ -280,7 +306,7 @@ result = resume_tuning("runs/tuning", bundle.train, cfg.target, cfg.id_columns, 
 result = load_tuning("runs/tuning")        # reads tuning.json only; no Optuna needed
 ```
 
-Artifact directory (created by `directory=`; an existing directory is refused): `study.db` (Optuna SQLite storage) and `tuning.json` (`schema_version` 2; schema 1 files still load, with failed trials categorized `other`: `task`, `metric`, `config`, `space`, `fingerprint`, `budgets` (one entry per run), `best_trial`, `trials` with `number`/`state`/`params`/`score`/`fold_scores`/`fold_std`/`duration_seconds`/`failure_reason`/`failure_category`, `versions`, `notes`). No training data is stored, nothing leaves the directory, and no network access is used. `resume_tuning` adds trials to the same study; its `n_trials`/`timeout_seconds` budget applies to the new trials only. It checks a fingerprint (rows, features, target, metric, estimator, seed, fixed parameters, preprocessing, and a hash of the split indices) and raises `TuningError` naming any difference. Mapping spaces are saved and reused; a callable space is not serializable and must be passed again. A resumed study reseeds the sampler as `seed + number of existing trials`. No CLI command exists for this phase.
+Artifact directory (created by `directory=`; an existing directory is refused): `study.db` (Optuna SQLite storage) and `tuning.json` (`schema_version` 2; schema 1 files still load, with failed trials categorized `other`: `task`, `metric`, `config`, `space`, `fingerprint`, `budgets` (one entry per run), `best_trial`, `trials` with `number`/`state`/`params`/`score`/`fold_scores`/`fold_std`/`duration_seconds`/`failure_reason`/`failure_category`, `versions`, `notes`). No training data is stored, nothing leaves the directory, and no network access is used. `resume_tuning` adds trials to the same study; its `n_trials`/`timeout_seconds` budget applies to the new trials only. It checks a fingerprint (rows, features, target, metric, estimator, seed, fixed parameters, preprocessing, and a hash of the split indices) and raises `TuningError` naming any difference. Mapping spaces are saved and reused; a callable space is not serializable and must be passed again. A resumed study reseeds the sampler as `seed + number of existing trials`. CLI: `automl tune --estimator ...` and `--resume`.
 
 ## Model-Family Search Spaces
 
@@ -323,11 +349,11 @@ res = load_tuning_families("runs/families")   # no Optuna needed
 res = resume_tuning_families("runs/families", bundle.train, cfg.target, cfg.id_columns, resolved, splits, n_trials=10)
 ```
 
-Artifacts: `<directory>/<family>/` holds the single-study `study.db` and `tuning.json`; `<directory>/tuning_families.json` (`schema_version` 1) holds `task`, `metric`, `config`, `budget_plan` (written before any trial runs), `families` (status, directory, error), `comparison`, `best_family`, and `notes`. An existing directory is refused. Family scores are search-selected validation means, optimistically biased, and are not leaderboard claims. No CLI command exists for this phase.
+Artifacts: `<directory>/<family>/` holds the single-study `study.db` and `tuning.json`; `<directory>/tuning_families.json` (`schema_version` 1) holds `task`, `metric`, `config`, `budget_plan` (written before any trial runs), `families` (status, directory, error), `comparison`, `best_family`, and `notes`. An existing directory is refused. Family scores are search-selected validation means, optimistically biased, and are not leaderboard claims. CLI: `automl tune` (families by default).
 
 ## Optional MLflow Tracking
 
-Install with `pip install 'automl[mlflow]'` (MLflow 3.x). Tracking mirrors results to MLflow only when you ask; without it nothing changes, `import automl` never imports MLflow, and requesting tracking without the package raises `automl.TrackingUnavailableError` (naming the install command) before any work. Local result directories remain the source of truth: a tracking failure raises `TrackingError` ("local results are intact") and never alters local files. No CLI flag exists for this phase.
+Install with `pip install 'automl[mlflow]'` (MLflow 3.x). Tracking mirrors results to MLflow only when you ask; without it nothing changes, `import automl` never imports MLflow, and requesting tracking without the package raises `automl.TrackingUnavailableError` (naming the install command) before any work. Local result directories remain the source of truth: a tracking failure raises `TrackingError` ("local results are intact") and never alters local files. CLI: `--track` on `baseline`, `tune`, `refit`, `submit`, and `run`.
 
 Pass a `TrackingConfig` as `tracking=` to `run_baseline`, `tune`, `resume_tuning`, `tune_families`, or `resume_tuning_families`, or mirror an existing result later with `track_baseline`, `track_tuning`, or `track_families` (each takes a result object or a saved directory). Mirroring happens after the local work finishes; a study with no completed trial is not mirrored.
 
@@ -482,7 +508,7 @@ collect_candidates("runs/families")      # ranking and warnings only
 
 Files are written only inside the output directory: `model_report.pdf` (or `filename=`) and `<stem>_summary.json` (`schema_version` 1: `candidates`, `excluded`, `warnings`, `charts`, `charts_skipped`, `config`, `notes`, `score_statement`). Existing files are refused unless `overwrite=True`; writes are atomic.
 
-Limits: every page states that scores are validation scores on the training data, optimistic after selection, and not leaderboard predictions. Single-fold (holdout) candidates have no estimable variability. The `[model_report]` table is read by `load_config`; no CLI command exists yet.
+Limits: every page states that scores are validation scores on the training data, optimistic after selection, and not leaderboard predictions. Single-fold (holdout) candidates have no estimable variability. The `[model_report]` table is read by `load_config`. CLI: `automl model-report`.
 
 ## Refit and Prediction
 
@@ -532,7 +558,7 @@ Files in the output directory (existing files are refused unless `overwrite=True
 
 With `tracking=`, the fitted pipeline (cloudpickle), selection parameters, provenance tags, validation mean/std, and `refit.json` are logged as one run (`automl.kind=refit`); raw data and predictions are not. The check for MLflow happens before fitting, and a logging failure raises `TrackingError` after the local files were written.
 
-Limits: one pipeline per call (no ensembling or seed averaging); exact repeatability only on CPU; validation scores in `selection` are optimistic after selection and are not leaderboard estimates; no CLI command exists yet.
+Limits: one pipeline per call (no ensembling or seed averaging); exact repeatability only on CPU; validation scores in `selection` are optimistic after selection and are not leaderboard estimates. CLI: `automl refit`.
 
 ## Submission CSV
 
@@ -577,4 +603,4 @@ Files in the output directory (existing files are refused unless `overwrite=True
 
 With `tracking=`, both files are logged as one run (`automl.kind=submission`). A directory is required, the check for MLflow happens before any file is written, and a logging failure raises `TrackingError` after the local files were written.
 
-Limits: Python API only (no CLI yet); no post-processing such as clipping, thresholding, or rounding; one prediction frame per call; the saved `submission.json` names the sample file but does not embed it.
+Limits: no post-processing such as clipping, thresholding, or rounding; one prediction frame per call; the saved `submission.json` names the sample file but does not embed it. CLI: `automl submit`.
