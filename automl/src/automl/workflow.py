@@ -13,9 +13,11 @@ from automl.baseline import RESULT_FILE as BASELINE_FILE
 from automl.baseline import run_baseline, save_baseline
 from automl.config import DataConfig, load_config
 from automl.eda import save_eda, summarize_bundle
+from automl.ensemble import EnsembleConfig, run_ensemble
 from automl.errors import (
     BaselineError,
     DataContractError,
+    EnsembleError,
     RefitError,
     RunError,
     SubmissionError,
@@ -388,6 +390,62 @@ def tune_stage(
 
 
 # ---- reports, refit, submission ----
+
+
+def ensemble_stage(
+    ctx: RunContext,
+    sources: Sequence[str | Path],
+    output_dir: str | Path,
+    *,
+    splits_path: str | Path | None = None,
+    method: str = "stacking",
+    labels: Sequence[str] | None = None,
+    stack_cv: int = 5,
+    n_jobs: int | None = None,
+    meta_estimator: str | None = None,
+    meta_estimator_params: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    out = Path(output_dir)
+    _new_dir(out, "ensemble", EnsembleError)
+    splits, splits_info = _splits(ctx, splits_path)
+    config = EnsembleConfig(
+        method=method,
+        seed=ctx.config.baseline_config.seed,
+        n_jobs=ctx.config.baseline_config.n_jobs if n_jobs is None else n_jobs,
+        stack_cv=stack_cv,
+        meta_estimator=meta_estimator,
+        meta_estimator_params=meta_estimator_params or {},
+    )
+    result = run_ensemble(
+        ctx.bundle.train,
+        ctx.config.target,
+        _ids(ctx),
+        ctx.resolved,
+        splits,
+        sources,
+        config,
+        labels=tuple(labels) if labels is not None else None,
+        directory=out,
+    )
+    return _plain(
+        {
+            "status": "created",
+            "directory": str(out),
+            "path": str(out / "ensemble.json"),
+            "model_path": str(out / "ensemble.joblib"),
+            "method": result.method,
+            "task": result.task.value,
+            "metric": result.metric,
+            "direction": result.direction,
+            "candidates": list(result.candidates),
+            "mean": result.mean,
+            "std": result.std,
+            "n_folds": len(result.folds),
+            "candidate_scores": result.to_dict()["candidate_scores"],
+            "splits": splits_info,
+            "data": ctx.data_files,
+        }
+    )
 
 
 def model_report(

@@ -22,7 +22,7 @@ import pandas as pd
 from sklearn.pipeline import Pipeline
 
 from automl.baseline import _versions
-from automl.errors import DataContractError, RefitError
+from automl.errors import DataContractError, EnsembleError, RefitError
 from automl.estimators import (
     DEVICES,
     FeatureLayout,
@@ -254,6 +254,34 @@ def select_pipeline(
 def _from_source(source: Any, label: str | None, rank: int | None) -> PipelineSelection:
     if label is not None and rank is not None:
         raise RefitError("pass either 'label' or 'rank', not both")
+    if isinstance(source, (str, Path)) and (Path(source) / "ensemble.json").is_file():
+        if label is not None or rank is not None:
+            raise RefitError("an ensemble result contains one selected ensemble; 'label' and 'rank' do not apply")
+        from automl.ensemble import load_ensemble
+
+        try:
+            metadata = load_ensemble(source).metadata
+        except EnsembleError as exc:
+            raise RefitError(exc.problems) from None
+        return PipelineSelection(
+            source_kind="ensemble",
+            source_path=str(Path(source)),
+            label=f"ensemble:{metadata['method']}",
+            estimator="ensemble",
+            params={"candidates": list(metadata["candidates"])},
+            preprocessing_config=PreprocessingConfig(),
+            task=metadata["task"],
+            metric=metadata["metric"]["name"],
+            direction=metadata["metric"]["direction"],
+            seed=metadata["config"]["seed"],
+            n_jobs=metadata["config"]["n_jobs"],
+            device="cpu",
+            native_categoricals=None,
+            features=tuple(metadata["feature_columns"]),
+            validation_mean=metadata["summary"]["mean"],
+            validation_std=metadata["summary"]["std"],
+            notes=("using the saved ensemble fitted on all training rows",),
+        )
     try:
         cset = collect_candidates(source)
     except DataContractError as exc:
@@ -384,6 +412,54 @@ def refit(
         problems.append(f"selection was scored with metric '{selection.metric}' but the resolved metric is '{name}'")
     if problems:
         raise RefitError(problems)
+    if selection.source_kind == "ensemble":
+        if selection.source_path is None:
+            raise RefitError("ensemble selection has no saved source path")
+        from automl.ensemble import load_ensemble
+
+        try:
+            loaded = load_ensemble(selection.source_path, load_model=True)
+        except EnsembleError as exc:
+            raise RefitError(exc.problems) from None
+        if loaded.model is None:
+            raise RefitError("ensemble result does not contain a fitted model; recreate it with save_model=true")
+        if loaded.metadata.get("n_rows") != len(train):
+            raise RefitError(
+                f"saved ensemble was fitted on {loaded.metadata.get('n_rows')} training rows; current data has {len(train)}"
+            )
+        from automl.ensemble import data_fingerprint
+
+        if loaded.metadata.get("data_sha256") != data_fingerprint(train):
+            raise RefitError("saved ensemble was fitted on different training data; recreate the ensemble for this run")
+        missing = [column for column in selection.features or () if column not in train.columns]
+        if missing:
+            raise RefitError(f"train data is missing ensemble feature columns {missing}")
+        plan = ColumnPlan(
+            numeric=tuple(
+                column for column in selection.features or () if loaded.metadata["feature_roles"][column] == "numeric"
+            ),
+            categorical=tuple(
+                column
+                for column in selection.features or ()
+                if loaded.metadata["feature_roles"][column] == "categorical"
+            ),
+            dropped=(),
+            excluded=tuple((*id_columns, target)),
+        )
+        classes = tuple(loaded.metadata.get("classes", ()))
+        return RefitPipeline(
+            pipeline=loaded.model,
+            selection=selection,
+            plan=plan,
+            target=target,
+            id_columns=id_columns,
+            task=task,
+            classes=classes,
+            n_train=len(train),
+            fit_seconds=0.0,
+            device={"requested": "cpu", "effective": "cpu", "reason": "loaded saved ensemble", "note": None},
+            native_categoricals=False,
+        )
     if task is not Task.REGRESSION and train[target].nunique() < 2:
         raise RefitError(f"target column '{target}' has fewer than two classes")
 

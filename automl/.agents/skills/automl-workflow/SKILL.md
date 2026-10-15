@@ -31,6 +31,7 @@ automl submit run.toml runs/1/refit --output-dir runs/1/submission
 | `baseline` | `automl-baseline` | TOML, CSVs, `splits.json` | `baseline.json`, out-of-fold predictions |
 | `tune` | `automl-tuning` | TOML, CSVs, `splits.json` | `tuning_families.json` or `tuning.json` |
 | `model-report` | `automl-model-report` | result directories | model PDF and summary JSON |
+| `ensemble` | `automl-ensemble` | TOML, two or more candidates, optional `splits.json` | `ensemble.json`, `ensemble.joblib` |
 | `refit` | `automl-refit` | result directory, CSVs | `predictions.csv`, `refit.json`, `pipeline.joblib` |
 | `submit` | `automl-submission` | refit directory, CSVs | `submission.csv`, `submission.json` |
 
@@ -40,8 +41,16 @@ automl submit run.toml runs/1/refit --output-dir runs/1/submission
 2. Choose a new output directory per experiment. Ask before reusing or overwriting one.
 3. Ask the user for the tuning budget and whether to enable `--track`; do not default either.
 4. Choose a mode. Stage by stage lets the user inspect results and change decisions between stages (preferred when anything is ambiguous). `automl run run.toml --output-dir runs/2 --n-trials 30` runs every stage in one call; it needs a new or empty directory, has no `--overwrite`, and writes `splits/ eda/ baseline/ tuning/ reports/ refit/ submission/`. `--skip-tuning` refits the baseline; `--skip-reports` skips both PDFs.
-5. After tuning, show the user the model comparison and confirm which candidate to refit unless rank 1 is clearly intended.
+5. After tuning, show the user the model comparison and confirm which candidate to refit unless rank 1 is clearly intended. If ensembling is requested instead, use `automl-ensemble` to confirm candidate labels and method before running the ensemble stage.
 6. Finish by pointing the user to `submission.csv` for manual upload.
+
+Optional, after the user confirms the ensemble method and candidates:
+
+```bash
+automl ensemble run.toml runs/1/baseline runs/1/tuning --method stacking --splits runs/1/splits/splits.json --output-dir runs/1/ensemble
+```
+
+Then pass `runs/1/ensemble` to `automl refit`.
 
 ## Inputs
 
