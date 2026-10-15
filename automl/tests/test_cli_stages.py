@@ -8,7 +8,8 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from automl.cli import main
+from automl.cli import build_parser, main
+from automl.workflow import ensemble_stage, load_run
 
 FAMILY = "hist_gradient_boosting"
 
@@ -81,7 +82,9 @@ def test_help_lists_every_command(capsys):
     out = capsys.readouterr().out
 
     assert exc.value.code == 0
-    for name in ("validate", "split", "eda", "report", "baseline", "tune", "model-report", "refit", "submit", "run"):
+    for name in (
+        "validate", "split", "eda", "report", "baseline", "tune", "model-report", "ensemble", "refit", "submit", "run"
+    ):
         assert name in out
 
 
@@ -99,6 +102,83 @@ def test_baseline_writes_result_and_refuses_overwrite(project, capsys, tmp_path_
     code, payload, err = cli(["baseline", _config(project), "--output-dir", out], capsys)
     assert code == 1 and payload is None
     assert "already exists" in err
+
+
+@pytest.mark.parametrize(
+    ("n_jobs", "configured_jobs", "expected_jobs"),
+    [(None, 1, 1), (None, 2, 2), (2, 1, 2)],
+)
+def test_ensemble_command_and_refit_use_saved_ensemble(
+    project, capsys, n_jobs, configured_jobs, expected_jobs
+):
+    with (project / "run.toml").open("a") as config:
+        config.write(f"\n[baseline]\nn_jobs = {configured_jobs}\n")
+    baseline_a, baseline_b = project / "baseline-a", project / "baseline-b"
+    assert cli(["baseline", _config(project), "--output-dir", baseline_a], capsys)[0] == 0
+    assert cli(["baseline", _config(project), "--output-dir", baseline_b, "--estimator", FAMILY], capsys)[0] == 0
+
+    output = project / "ensemble"
+    code, payload, err = cli(
+        [
+            "ensemble",
+            _config(project),
+            str(baseline_a),
+            str(baseline_b),
+            "--method",
+            "stacking",
+            "--stack-cv",
+            "3",
+            "--output-dir",
+            str(output),
+            *(["--n-jobs", str(n_jobs)] if n_jobs is not None else []),
+        ],
+        capsys,
+    )
+    assert code == 0, err
+    assert payload["method"] == "stacking"
+    assert len(payload["candidates"]) == 2
+    assert (output / "ensemble.json").is_file() and (output / "ensemble.joblib").is_file()
+    assert json.loads((output / "ensemble.json").read_text())["config"]["n_jobs"] == expected_jobs
+    api_payload = ensemble_stage(
+        load_run(_config(project)),
+        [baseline_a, baseline_b],
+        project / "ensemble-api",
+        method="stacking",
+        stack_cv=3,
+        n_jobs=n_jobs,
+    )
+    assert json.loads((project / "ensemble-api" / "ensemble.json").read_text())["config"]["n_jobs"] == expected_jobs
+    assert api_payload["mean"] == payload["mean"]
+    assert api_payload["candidate_scores"] == payload["candidate_scores"]
+
+    code, refit_payload, err = cli(
+        ["refit", _config(project), str(output), "--output-dir", str(project / "ensemble-refit")], capsys
+    )
+    assert code == 0, err
+    assert refit_payload["source_kind"] == "ensemble"
+    assert refit_payload["n_test_rows"] == 30
+
+
+def test_ensemble_parser_accepts_all_available_cores():
+    args = build_parser().parse_args(
+        ["ensemble", "run.toml", "source-a", "source-b", "--output-dir", "ensemble", "--n-jobs", "-1"]
+    )
+    assert args.n_jobs == -1
+
+
+@pytest.mark.parametrize("n_jobs", [0, -2])
+def test_ensemble_rejects_invalid_n_jobs(project, capsys, n_jobs):
+    output = project / "invalid-ensemble"
+    code, payload, err = cli(
+        [
+            "ensemble", _config(project), "source-a", "source-b",
+            "--output-dir", output, "--n-jobs", n_jobs,
+        ],
+        capsys,
+    )
+    assert code == 1 and payload is None
+    assert "'n_jobs' must be -1 or an integer of at least 1" in err
+    assert not output.exists()
 
 
 def test_saved_splits_give_the_same_scores_as_config_splits(project, capsys):

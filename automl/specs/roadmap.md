@@ -190,18 +190,30 @@ When identifiers are available, predictions must remain aligned to the correspon
 
 **Verification:** With all extras in the project-local `.venv`, `pip check` and the full suite passed (1 GPU test skipped). New `tests/test_agent_guidance.py` checks frontmatter, folder/name match, required headings, `AGENTS.md` routing and rules, that every documented `automl` command, option, and API name exists, and a socket-blocked walkthrough that runs the `automl-workflow` command block on synthetic CSVs and checks each skill's documented artifact names, plus the `run` layout. Added skills: `automl-workflow`, `automl-baseline`, `automl-tuning`, `automl-model-report`, `automl-refit`, `automl-submission`; the three existing skills were revised to the same headings. `AGENTS.md` now restricts agents to the existing tools and requires user approval before new code or hand edits. No package behavior or dependency changed. The clean-environment run (only the `test` extra) was not repeated.
 
-## Phase 18: Optional PyTorch Estimator
+## Phase 18: Model Ensembling
+
+**Status:** Complete (2026-10-15).
+
+**Deliverable:** Add reusable classification voting and classification/regression stacking over saved baseline, tuning, and model-family candidates. Classification voting uses hard majority voting; regression is stacking-only. Expose the capability through the Python API and CLI, persist inspectable ensemble results, and support refitting the selected ensemble for test predictions.
+
+**Acceptance:** Synthetic tests verify hard-vote and stacking behavior for classification, stacking for regression, leakage-safe meta-model training, reproducible validation against shared splits, saved-artifact round trips, refit prediction validity, and CLI/API parity. Core installs need no new dependencies, and ensembling is not required to improve on any individual candidate.
+
+**Specification:** [requirements](./2026-10-15-model-ensembling/requirements.md), [plan](./2026-10-15-model-ensembling/plan.md), [validation](./2026-10-15-model-ensembling/validation.md).
+
+**Verification:** With all installed extras, the full AutoML suite passed: 607 passed, 1 GPU-dependent test skipped. New ensemble tests cover hard voting and classification/regression stacking, default and configured meta-models, baseline/tuning/family candidate sources, leakage-safe fold preprocessing, candidate selection errors, saved artifact loading, training-data fingerprint enforcement during refit, and CLI/API parity. `ensemble` is available through the Python API and CLI; no dependency was added. Existing refit and submission checks continue to pass.
+
+## Later, Explicitly Optional Work
+
+### Optional: PyTorch Estimator
 
 **Deliverable:** Add a PyTorch-based tabular estimator only after a concrete use case, with scikit-learn-compatible cloning and explicit resource controls.
 
 **Acceptance:** CPU-only synthetic tests verify fit/predict, reproducibility settings, parameter handling, and integration with the existing CV/tuning interfaces. GPU use remains optional.
 
-## Phase 19: Hardening and Documentation
+### Optional: Hardening and Documentation
 
 **Deliverable:** User documentation, representative synthetic examples, dependency compatibility checks, and robustness improvements based on real usage.
 
 **Acceptance:** A fresh local setup follows documented commands; core tests pass without optional integrations; optional dependency groups have focused smoke tests; all generated artifacts and limitations are documented.
 
-## Later, Explicitly Optional Work
-
-Remote SageMaker or other cloud execution, richer model registries, ensembling, feature stores, and competition-specific skills should be proposed as separate increments after the local workflow is reliable. They must not become hidden requirements of the core pipeline.
+Remote SageMaker or other cloud execution, richer model registries, feature stores, and competition-specific skills should be proposed as separate increments after the local workflow is reliable. They must not become hidden requirements of the core pipeline.

@@ -14,6 +14,7 @@ SKILLS = ROOT / ".agents" / "skills"
 EXPECTED = {
     "automl-workflow", "automl-data-intake", "automl-validation-splits", "automl-eda-reporting",
     "automl-baseline", "automl-tuning", "automl-model-report", "automl-refit", "automl-submission",
+    "automl-ensemble",
 }
 STAGE_SKILLS = EXPECTED - {"automl-workflow"}
 HEADINGS = ("## Use when", "## Procedure", "## Inputs", "## Outputs", "## Assumptions and limits", "## Check")
@@ -22,6 +23,7 @@ PRODUCES = {
     "automl-baseline": ("baseline.json", "oof_predictions.csv"),
     "automl-tuning": ("tuning_families.json",),
     "automl-model-report": ("model_report.pdf", "model_report_summary.json"),
+    "automl-ensemble": ("ensemble.json", "ensemble.joblib"),
     "automl-refit": ("predictions.csv", "refit.json", "pipeline.joblib"),
     "automl-submission": ("submission.csv", "submission.json"),
 }
@@ -87,6 +89,7 @@ def test_workflow_and_stage_skills_state_confirmations():
     assert "never upload" in _skill("automl-submission").lower()
     for extra, name in (("reports", "automl-model-report"), ("tuning", "automl-tuning"), ("boosting", "automl-baseline")):
         assert f"'.[{extra}]'" in _skill(name)
+    assert "out-of-fold" in _skill("automl-ensemble").lower()
 
 
 def _parser_options():

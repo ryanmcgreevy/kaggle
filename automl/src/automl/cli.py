@@ -8,7 +8,7 @@ from typing import Any
 
 from automl import workflow
 from automl.config import load_config
-from automl.errors import DataContractError
+from automl.errors import DataContractError, EnsembleError
 
 
 def _write_json(payload: dict[str, Any]) -> None:
@@ -75,6 +75,31 @@ def _model_report(args: argparse.Namespace) -> int:
     _write_json(
         workflow.model_report(
             ctx, args.sources, args.output_dir, filename=args.filename, top_n=args.top_n, overwrite=args.overwrite
+        )
+    )
+    return 0
+
+
+def _ensemble(args: argparse.Namespace) -> int:
+    ctx = workflow.load_run(args.config)
+    try:
+        meta_params = json.loads(args.meta_estimator_params)
+    except json.JSONDecodeError as exc:
+        raise EnsembleError(f"--meta-estimator-params must be a JSON object: {exc}") from None
+    if not isinstance(meta_params, dict):
+        raise EnsembleError("--meta-estimator-params must be a JSON object")
+    _write_json(
+        workflow.ensemble_stage(
+            ctx,
+            args.sources,
+            args.output_dir,
+            splits_path=args.splits,
+            method=args.method,
+            labels=args.label,
+            stack_cv=args.stack_cv,
+            n_jobs=args.n_jobs,
+            meta_estimator=args.meta_estimator,
+            meta_estimator_params=meta_params,
         )
     )
     return 0
@@ -184,6 +209,34 @@ def build_parser() -> argparse.ArgumentParser:
     model_report.add_argument("--top-n", type=int, help="number of best models to compare (overrides [model_report])")
     model_report.add_argument("--overwrite", action="store_true", help="replace existing report files")
     model_report.set_defaults(handler=_model_report)
+
+    ensemble = commands.add_parser(
+        "ensemble", help="evaluate a voting or stacking ensemble from saved model candidates"
+    )
+    _add_config(ensemble)
+    ensemble.add_argument("sources", nargs="+", help="baseline, tuning, or tuning-families result directories")
+    ensemble.add_argument("--output-dir", required=True, help="new directory for ensemble.json and ensemble.joblib")
+    ensemble.add_argument("--method", choices=("voting", "stacking"), default="stacking")
+    ensemble.add_argument("--label", action="append", help="candidate label to include; repeat to select several")
+    ensemble.add_argument("--splits", help="saved splits.json to reuse (default: build from [validation])")
+    ensemble.add_argument("--stack-cv", type=int, default=5, help="inner stacking folds (default: 5)")
+    ensemble.add_argument(
+        "--n-jobs",
+        type=int,
+        help="parallel jobs within stacking/voting; -1 uses all available cores "
+        "(default: [baseline].n_jobs, or 1); candidate-model threading is unchanged",
+    )
+    ensemble.add_argument(
+        "--meta-estimator",
+        help="stacking meta-estimator: logistic_regression, decision_tree_classifier, random_forest_classifier, "
+        "ridge_cv, ridge, decision_tree_regressor, or random_forest_regressor",
+    )
+    ensemble.add_argument(
+        "--meta-estimator-params",
+        default="{}",
+        help="JSON object of parameters for the selected meta-estimator (default: {})",
+    )
+    ensemble.set_defaults(handler=_ensemble)
 
     refit = commands.add_parser("refit", help="refit the selected pipeline on all train rows and predict test rows")
     _add_config(refit)

@@ -83,6 +83,12 @@ class RefitError(DataContractError):
     _header = "Refit problems:"
 
 
+class EnsembleError(DataContractError):
+    """Ensemble settings, candidates, evaluation, or artifacts are invalid."""
+
+    _header = "Ensembling problems:"
+
+
 class SubmissionError(DataContractError):
     """Submission settings, inputs, schema, values, or artifacts are invalid."""
 

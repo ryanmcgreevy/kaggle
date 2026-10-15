@@ -29,7 +29,8 @@ automl report run.toml runs/1/eda/eda.json --output-dir runs/1/reports
 automl baseline run.toml --output-dir runs/1/baseline --splits runs/1/splits/splits.json
 automl tune run.toml --output-dir runs/1/tuning --families hist_gradient_boosting,lightgbm --n-trials 30
 automl model-report run.toml runs/1/baseline runs/1/tuning --output-dir runs/1/reports
-automl refit run.toml runs/1/tuning --output-dir runs/1/refit
+automl ensemble run.toml runs/1/baseline runs/1/tuning --method stacking --splits runs/1/splits/splits.json --output-dir runs/1/ensemble
+automl refit run.toml runs/1/ensemble --output-dir runs/1/refit
 automl submit run.toml runs/1/refit --output-dir runs/1/submission
 ```
 
@@ -48,21 +49,23 @@ automl run run.toml --output-dir runs/2 --n-trials 30
 | `baseline` | TOML, CSVs, optional `--splits`, `--estimator` | a new baseline result directory (`baseline.json`, out-of-fold predictions, fold models) |
 | `tune` | TOML, CSVs, optional `--splits`, `--estimator` or `--families`, a budget | a new tuning directory (`tuning_families.json` plus one study per family, or `tuning.json` with `--estimator`) |
 | `model-report` | TOML, one or more result directories, `--top-n` | model comparison PDF and summary JSON |
+| `ensemble` | TOML, two or more compatible result directories, optional `--splits`, `--method`, `--n-jobs`, repeated `--label` | `ensemble.json` and fitted `ensemble.joblib` |
 | `refit` | TOML, CSVs, a result directory, `--label` or `--rank` | `predictions.csv`, `refit.json`, `pipeline.joblib` |
 | `submit` | TOML, CSVs, a refit directory | `submission.csv`, `submission.json` |
-| `run` | TOML, CSVs, optional `--estimator`/`--families`, budget | all of the above under `splits/ eda/ baseline/ tuning/ reports/ refit/ submission/` |
+| `run` | TOML, CSVs, optional `--estimator`/`--families`, budget | the automatic workflow under `splits/ eda/ baseline/ tuning/ reports/ refit/ submission/`; ensembling is a separate user-selected stage |
 
 Hand-off between stages is by explicit directory paths; no hidden state is used, so any stage can be rerun alone from the saved artifacts.
 
-- **Splits.** `--splits` on `baseline` and `tune` is optional. With a saved `splits.json`, every candidate uses the identical folds; without it, splits are built from `[validation]` (seeded, so identical for the same config and data) and are not saved. A file made for different data (row count or task) is rejected. `run` saves the splits once and reuses them.
+- **Splits.** `--splits` on `baseline`, `tune`, and `ensemble` is optional. With a saved `splits.json`, every candidate and the ensemble use identical outer folds; without it, splits are built from `[validation]` (seeded, so identical for the same config and data) and are not saved. A file made for different data (row count or task) is rejected. `run` saves the splits once and reuses them.
 - **Tuning budget.** `tune` and `run` need `--n-trials` and/or `--timeout-seconds` (or the same keys, or per-family budgets, in `[tuning]`); there is no default budget, and the budget is printed to stderr before the study starts. `tune` covers every installed family unless `--families` or `[tuning] families` is set; skipped, not-installed families are listed with their install command. `--estimator` tunes one estimator instead. `--resume` adds trials to the study in `--output-dir`; its budget counts new trials only.
 - **Reports.** `model-report` accepts baseline, tuning, and families directories, alone or mixed. Scores are validation scores, not leaderboard claims.
-- **Selection.** `refit` and `run` use rank 1 of the given result unless `--rank` or `--label` is passed (labels appear in the `model-report` JSON). `run` refits the tuned result, or the baseline with `--skip-tuning`.
-- **Overwrite.** New baseline, tuning, split, and EDA artifacts refuse an existing path. `report`, `model-report`, `refit`, and `submit` refuse existing files unless `--overwrite`. `run` needs a new or empty `--output-dir`; if a stage fails it stops, keeps the files already written, and names the failing and completed stages.
+- **Ensembling.** `ensemble` accepts baseline, tuning, and families result directories. It reuses candidate parameters/preprocessing but fits every fold-local model using only that fold's training rows; it never retunes. Classification supports hard majority voting and stacking; regression supports stacking only. Stacking uses LogisticRegression by default for classification and RidgeCV for regression. Supply repeated `--label` flags to select candidates. Hard voting combines class predictions (class ordering resolves ties), so only label metrics and binary ROC AUC are supported; use stacking for probability metrics. The final `ensemble.joblib` is fit on all training rows and can be passed to `refit` for predictions. Ensembles need not improve on their components.
+- **Selection.** `refit` and `run` use rank 1 of the given result unless `--rank` or `--label` is passed (labels appear in the `model-report` JSON). An ensemble result contains one selected model and takes neither option. `run` refits the tuned result, or the baseline with `--skip-tuning`.
+- **Overwrite.** New baseline, tuning, ensemble, split, and EDA artifacts refuse an existing path. `report`, `model-report`, `refit`, and `submit` refuse existing files unless `--overwrite`. `run` needs a new or empty `--output-dir`; if a stage fails it stops, keeps the files already written, and names the failing and completed stages.
 - **Tracking.** `--track` (on `baseline`, `tune`, `refit`, `submit`, `run`) logs to MLflow using the `[tracking]` table; without `--track` nothing is logged even if the table exists. A baseline with no `tracking_uri` or `directory` logs to its own result directory. If logging fails after local files were written, the command exits 1 and says the local results are intact.
-- **Optional extras.** A missing optional package is reported with its install command before files are written: `pip install -e '.[reports]'` (PDFs), `'.[tuning]'` (Optuna), `'.[boosting]'` or `'.[lightgbm]'`, `'.[xgboost]'`, `'.[catboost]'`, and `'.[mlflow]'`. The core install runs `validate`, `split`, `eda`, `baseline`, `refit`, and `submit` with scikit-learn estimators only; `automl --help` works without any extra.
+- **Optional extras.** A missing optional package is reported with its install command before files are written: `pip install -e '.[reports]'` (PDFs), `'.[tuning]'` (Optuna), `'.[boosting]'` or `'.[lightgbm]'`, `'.[xgboost]'`, `'.[catboost]'`, and `'.[mlflow]'`. The core install runs `validate`, `split`, `eda`, `baseline`, scikit-learn-based `ensemble`, `refit`, and `submit`; `automl --help` works without any extra.
 
-Limits: one pipeline is refit and submitted per run; `run` always uses the configured stage tables and has no interactive prompts; large searches are bounded only by their budget, so choose it deliberately. See the sections below for each stage's artifacts, assumptions, and checks.
+Limits: one selected pipeline or ensemble is refit and submitted per run; `run` always uses the configured stage tables and has no interactive prompts; large searches are bounded only by their budget, so choose it deliberately. See the sections below for each stage's artifacts, assumptions, and checks.
 
 ## Input Data Contract
 
@@ -510,9 +513,44 @@ Files are written only inside the output directory: `model_report.pdf` (or `file
 
 Limits: every page states that scores are validation scores on the training data, optimistic after selection, and not leaderboard predictions. Single-fold (holdout) candidates have no estimable variability. The `[model_report]` table is read by `load_config`. CLI: `automl model-report`.
 
+## Model Ensembling
+
+`run_ensemble` takes saved baseline, tuning, or model-family result directories, reuses their estimator parameters and preprocessing, and evaluates the requested ensemble on the provided `SplitResult`. It rebuilds and fits base pipelines within each training fold; hyperparameter search is not repeated. Stacking learns its meta-model from out-of-fold base predictions inside each outer training fold. After evaluation it fits one final ensemble on all training rows for prediction. It requires no optional dependency beyond the selected candidates' model libraries.
+
+```bash
+automl ensemble run.toml runs/1/baseline runs/1/tuning \
+  --method stacking --splits runs/1/splits/splits.json \
+  --output-dir runs/1/ensemble
+automl refit run.toml runs/1/ensemble --output-dir runs/1/refit
+```
+
+Classification supports `--method voting` (hard majority vote) and `--method stacking`; regression supports stacking only. The default stacking meta-model is LogisticRegression for classification and RidgeCV for regression. Choose a different supported meta-estimator with `--meta-estimator` and optional JSON `--meta-estimator-params`. Use `--label` repeatedly to select candidate labels; otherwise all compatible candidates from the supplied directories are used. When selecting labels, obtain them from `collect_candidates` or the `model-report` summary. Hard voting uses predicted class labels and class ordering breaks ties; probability metrics other than binary ROC AUC require stacking.
+
+Use `--n-jobs 2` to request two parallel jobs within stacking/voting, or `--n-jobs -1` for all available cores. Without the flag, `[baseline].n_jobs` is used (default `1`), preserving existing behavior. Outer validation folds remain sequential. This setting does not override the saved candidate models' thread counts or meta-estimator parameters. Parallel workers increase memory use; combining many workers with multi-threaded candidate models can oversubscribe CPUs, so choose a bounded worker count when resources are shared.
+
+```python
+from automl import EnsembleConfig, load_config, load_data, make_splits, resolve_task_metric, run_ensemble
+
+cfg = load_config("run.toml")
+bundle = load_data(cfg)
+resolved = resolve_task_metric(bundle.train[cfg.target], cfg.task_config)
+splits = make_splits(bundle.train[cfg.target], resolved, cfg.validation_config)
+result = run_ensemble(
+    bundle.train, cfg.target, cfg.id_columns, resolved, splits,
+    ["runs/1/baseline", "runs/1/tuning"],
+    EnsembleConfig(method="stacking", stack_cv=5),
+    directory="runs/1/ensemble",
+)
+result.mean, result.std, result.candidates
+```
+
+The JSON artifact (`ensemble.json`, schema version 1) records candidates, per-fold and summary metrics, split settings, feature columns and roles, task/metric, and the data fingerprint. `ensemble.joblib` contains the final model fitted on all rows; it is a pickle and should be loaded only from a trusted directory. `load_ensemble` reads metadata without deserializing the model; pass `load_model=True` only for trusted artifacts. `automl refit` accepts the ensemble directory and rejects a different training dataset. Existing output directories are not overwritten.
+
+Limits: validation scores are optimistic after candidate/ensemble selection and are not leaderboard claims. Hard voting cannot calculate log loss or other probability-required metrics. Ensembles are not guaranteed to beat their members. CLI: `automl ensemble`; Python API: `run_ensemble`, `load_ensemble`, `save_ensemble`.
+
 ## Refit and Prediction
 
-`refit_and_predict` refits one selected pipeline on every training row and predicts the test rows. The pipeline comes from a saved baseline, tuning, or families directory (or loaded result), or from an explicit estimator and parameters. Preprocessing and estimator are rebuilt and fitted together as one scikit-learn `Pipeline`; fold models from earlier runs are never reused. Outputs are raw model outputs: no clipping, thresholding, or submission schema checks (the next phase). Needs no optional package beyond the chosen estimator's; MLflow is used only when `tracking=` is passed.
+`refit_and_predict` refits one selected pipeline on every training row and predicts the test rows. The pipeline comes from a saved baseline, tuning, or families directory (or loaded result), from an explicit estimator and parameters, or from a saved ensemble directory. For individual candidates preprocessing and estimator are rebuilt and fitted together as one scikit-learn `Pipeline`; for ensembles the saved `ensemble.joblib` is used after verifying its training-data fingerprint. Outputs are raw model outputs: no clipping, thresholding, or submission schema checks (the next phase). Needs no optional package beyond the chosen estimator's; MLflow is used only when `tracking=` is passed.
 
 ```toml
 [refit]
@@ -558,7 +596,7 @@ Files in the output directory (existing files are refused unless `overwrite=True
 
 With `tracking=`, the fitted pipeline (cloudpickle), selection parameters, provenance tags, validation mean/std, and `refit.json` are logged as one run (`automl.kind=refit`); raw data and predictions are not. The check for MLflow happens before fitting, and a logging failure raises `TrackingError` after the local files were written.
 
-Limits: one pipeline per call (no ensembling or seed averaging); exact repeatability only on CPU; validation scores in `selection` are optimistic after selection and are not leaderboard estimates. CLI: `automl refit`.
+Limits: one selected pipeline or ensemble per call; exact repeatability only on CPU; validation scores in `selection` are optimistic after selection and are not leaderboard estimates. CLI: `automl refit`.
 
 ## Submission CSV
 
