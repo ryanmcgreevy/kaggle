@@ -1,7 +1,9 @@
 """Command-line interface for the AutoML toolkit."""
 
 import argparse
+import contextlib
 import json
+import os
 import sys
 from collections.abc import Sequence
 from typing import Any
@@ -9,6 +11,7 @@ from typing import Any
 from automl import workflow
 from automl.config import load_config
 from automl.errors import DataContractError, EnsembleError
+from automl.progress import StderrProgress
 
 
 def _write_json(payload: dict[str, Any]) -> None:
@@ -19,6 +22,35 @@ def _names(value: str | None) -> list[str] | None:
     if value is None:
         return None
     return [name.strip() for name in value.split(",") if name.strip()]
+
+
+def _progress(args: argparse.Namespace) -> StderrProgress | None:
+    return None if args.quiet else StderrProgress()
+
+
+@contextlib.contextmanager
+def _native_output_to_stderr(enabled: bool):
+    if not enabled:
+        yield
+        return
+    stdout = sys.stdout
+    try:
+        stdout_fd = stdout.fileno()
+        stderr_fd = sys.stderr.fileno()
+    except (AttributeError, OSError, ValueError):
+        with contextlib.redirect_stdout(sys.stderr):
+            yield
+        return
+    stdout.flush()
+    saved_stdout = os.dup(stdout_fd)
+    try:
+        os.dup2(stderr_fd, stdout_fd)
+        with contextlib.redirect_stdout(sys.stderr):
+            yield
+    finally:
+        sys.stdout.flush()
+        os.dup2(saved_stdout, stdout_fd)
+        os.close(saved_stdout)
 
 
 def _validate(args: argparse.Namespace) -> int:
@@ -46,16 +78,24 @@ def _report(args: argparse.Namespace) -> int:
 
 def _baseline(args: argparse.Namespace) -> int:
     ctx = workflow.load_run(args.config)
-    _write_json(
-        workflow.baseline(ctx, args.output_dir, splits_path=args.splits, estimator=args.estimator, track=args.track)
-    )
+    with _native_output_to_stderr(args.verbose):
+        payload = workflow.baseline(
+            ctx,
+            args.output_dir,
+            splits_path=args.splits,
+            estimator=args.estimator,
+            track=args.track,
+            progress=_progress(args),
+            verbose=args.verbose,
+        )
+    _write_json(payload)
     return 0
 
 
 def _tune(args: argparse.Namespace) -> int:
     ctx = workflow.load_run(args.config)
-    _write_json(
-        workflow.tune_stage(
+    with _native_output_to_stderr(args.verbose):
+        payload = workflow.tune_stage(
             ctx,
             args.output_dir,
             splits_path=args.splits,
@@ -65,8 +105,10 @@ def _tune(args: argparse.Namespace) -> int:
             timeout_seconds=args.timeout_seconds,
             resume=args.resume,
             track=args.track,
+            progress=_progress(args),
+            verbose=args.verbose,
         )
-    )
+    _write_json(payload)
     return 0
 
 
@@ -88,8 +130,8 @@ def _ensemble(args: argparse.Namespace) -> int:
         raise EnsembleError(f"--meta-estimator-params must be a JSON object: {exc}") from None
     if not isinstance(meta_params, dict):
         raise EnsembleError("--meta-estimator-params must be a JSON object")
-    _write_json(
-        workflow.ensemble_stage(
+    with _native_output_to_stderr(args.verbose):
+        payload = workflow.ensemble_stage(
             ctx,
             args.sources,
             args.output_dir,
@@ -100,18 +142,28 @@ def _ensemble(args: argparse.Namespace) -> int:
             n_jobs=args.n_jobs,
             meta_estimator=args.meta_estimator,
             meta_estimator_params=meta_params,
+            progress=_progress(args),
+            verbose=args.verbose,
         )
-    )
+    _write_json(payload)
     return 0
 
 
 def _refit(args: argparse.Namespace) -> int:
     ctx = workflow.load_run(args.config)
-    _write_json(
-        workflow.refit_stage(
-            ctx, args.source, args.output_dir, label=args.label, rank=args.rank, overwrite=args.overwrite, track=args.track
+    with _native_output_to_stderr(args.verbose):
+        payload = workflow.refit_stage(
+            ctx,
+            args.source,
+            args.output_dir,
+            label=args.label,
+            rank=args.rank,
+            overwrite=args.overwrite,
+            track=args.track,
+            progress=_progress(args),
+            verbose=args.verbose,
         )
-    )
+    _write_json(payload)
     return 0
 
 
@@ -123,8 +175,8 @@ def _submit(args: argparse.Namespace) -> int:
 
 def _run(args: argparse.Namespace) -> int:
     ctx = workflow.load_run(args.config)
-    _write_json(
-        workflow.run(
+    with _native_output_to_stderr(args.verbose):
+        payload = workflow.run(
             ctx,
             args.output_dir,
             estimator=args.estimator,
@@ -134,8 +186,10 @@ def _run(args: argparse.Namespace) -> int:
             skip_tuning=args.skip_tuning,
             skip_reports=args.skip_reports,
             track=args.track,
+            progress=_progress(args),
+            verbose=args.verbose,
         )
-    )
+    _write_json(payload)
     return 0
 
 
@@ -150,6 +204,16 @@ def _add_budget(command: argparse.ArgumentParser) -> None:
 
 def _add_track(command: argparse.ArgumentParser) -> None:
     command.add_argument("--track", action="store_true", help="log to MLflow using the [tracking] table")
+
+
+def _add_progress(command: argparse.ArgumentParser) -> None:
+    modes = command.add_mutually_exclusive_group()
+    modes.add_argument(
+        "--verbose",
+        action="store_true",
+        help="show progress and enable supported estimator-native training output on stderr",
+    )
+    modes.add_argument("--quiet", action="store_true", help="suppress progress output but still show errors")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -188,6 +252,7 @@ def build_parser() -> argparse.ArgumentParser:
     baseline.add_argument("--splits", help="saved splits.json to reuse (default: build from [validation])")
     baseline.add_argument("--estimator", help="estimator to use instead of the configured one")
     _add_track(baseline)
+    _add_progress(baseline)
     baseline.set_defaults(handler=_baseline)
 
     tune = commands.add_parser("tune", help="tune several model families (default) or one estimator with Optuna")
@@ -199,6 +264,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_budget(tune)
     tune.add_argument("--resume", action="store_true", help="add trials to the saved study in --output-dir")
     _add_track(tune)
+    _add_progress(tune)
     tune.set_defaults(handler=_tune)
 
     model_report = commands.add_parser("model-report", help="create the model comparison PDF from saved results")
@@ -236,6 +302,7 @@ def build_parser() -> argparse.ArgumentParser:
         default="{}",
         help="JSON object of parameters for the selected meta-estimator (default: {})",
     )
+    _add_progress(ensemble)
     ensemble.set_defaults(handler=_ensemble)
 
     refit = commands.add_parser("refit", help="refit the selected pipeline on all train rows and predict test rows")
@@ -247,6 +314,7 @@ def build_parser() -> argparse.ArgumentParser:
     choice.add_argument("--rank", type=int, help="candidate rank to refit (default: 1)")
     refit.add_argument("--overwrite", action="store_true", help="replace existing refit files")
     _add_track(refit)
+    _add_progress(refit)
     refit.set_defaults(handler=_refit)
 
     submit = commands.add_parser("submit", help="validate predictions and write submission.csv (never uploads)")
@@ -266,6 +334,7 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--skip-tuning", action="store_true", help="refit the baseline instead of tuned models")
     run.add_argument("--skip-reports", action="store_true", help="do not write the EDA and model PDFs")
     _add_track(run)
+    _add_progress(run)
     run.set_defaults(handler=_run)
 
     return parser

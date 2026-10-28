@@ -4,22 +4,45 @@ Local-first tools for tabular Kaggle competitions. The package provides a Python
 
 ## Install and Test
 
-From this directory, install the package and its test extra in editable mode:
+The repository's existing project environment is `automl/.venv`. If it is already set up, use it directly rather than system Python or a bare `automl` command:
 
 ```bash
-python -m pip install -e '.[test]'
+# From the repository root:
+./automl/.venv/bin/python -m automl --help
+# From a sibling competition directory such as playground-s6ep10/:
+../automl/.venv/bin/python -m automl validate run.toml
 ```
 
-Run the test suite:
+For a fresh setup, run the following from this directory (`automl/`); create the environment only if `.venv` does not already exist. For an existing environment, install only missing required dependencies/extras:
 
 ```bash
-python -m pytest
+python3 -m venv .venv
+./.venv/bin/python -m pip install -e '.[test]'
 ```
+
+Run the test suite from this directory with `./.venv/bin/python -m pytest`.
+
+The CLI examples below use `automl` as shorthand for the selected project interpreter's `-m automl` invocation. Do not assume `python` or `automl` is on PATH. Command-line config, artifact, and output paths resolve relative to the working directory; CSV paths inside the TOML resolve relative to that TOML.
 
 Optional model libraries are installed with extras (`lightgbm`, `xgboost`, `catboost`, or `boosting` for all); adapter tests are skipped when a library is absent. Hyperparameter tuning needs the `tuning` extra (`pip install 'automl[tuning]'`, Optuna); its tests are skipped without it. MLflow tracking needs the `mlflow` extra (`pip install 'automl[mlflow]'`); its integration tests are skipped without it.
 ## CLI
 
 Every command is a thin wrapper over the Python API described below; people and agents use the same commands. Successful commands print one JSON object to stdout; progress notes and errors go to stderr (`error: ...`). Exit status is 0 on success, 1 for workflow, data-contract, missing-extra, and file errors, and 2 for usage errors. Input paths in the TOML resolve relative to that file; `--output-dir` is relative to the current working directory and is created when needed. Task and metric must be set in `[task]`; the CLI never guesses them. Nothing contacts Kaggle or the network, and nothing is uploaded or submitted.
+
+`baseline`, `tune`, `ensemble`, `refit`, and `run` print immediately flushed progress to stderr by default; stdout remains JSON. Pass `--quiet` to suppress progress while keeping errors, or `--verbose` to also enable native estimator output where supported. The options are mutually exclusive. LightGBM, XGBoost, and CatBoost native output is routed to stderr; scikit-learn HistGradientBoosting has no native output enabled by this option. Native training loss, when shown, may not be the selected validation metric, and iteration-level output depends on the estimator.
+
+Python API calls remain silent unless a progress callback is supplied. The callback receives immutable `ProgressEvent` objects (`stage`, `event`, `elapsed_seconds`, and event-specific `details`):
+
+```python
+from automl import run_baseline
+
+events = []
+result = run_baseline(
+    bundle.train, cfg.target, cfg.id_columns, resolved, splits,
+    cfg.baseline_config, cfg.preprocessing_config, progress=events.append,
+)
+print(events[-1].event, result.mean)
+```
 
 ```bash
 automl validate run.toml
@@ -53,6 +76,8 @@ automl run run.toml --output-dir runs/2 --n-trials 30
 | `refit` | TOML, CSVs, a result directory, `--label` or `--rank` | `predictions.csv`, `refit.json`, `pipeline.joblib` |
 | `submit` | TOML, CSVs, a refit directory | `submission.csv`, `submission.json` |
 | `run` | TOML, CSVs, optional `--estimator`/`--families`, budget | the automatic workflow under `splits/ eda/ baseline/ tuning/ reports/ refit/ submission/`; ensembling is a separate user-selected stage |
+
+Progress options apply to the five long-running commands above: `--quiet` suppresses progress but not errors, and `--verbose` additionally enables supported estimator-native output on stderr. Progress reports stage/model and fold lifecycle, elapsed time, and completed-trial scores with the best score so far.
 
 Hand-off between stages is by explicit directory paths; no hidden state is used, so any stage can be rerun alone from the saved artifacts.
 

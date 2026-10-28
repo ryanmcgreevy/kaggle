@@ -104,6 +104,87 @@ def test_baseline_writes_result_and_refuses_overwrite(project, capsys, tmp_path_
     assert "already exists" in err
 
 
+def test_baseline_progress_keeps_stdout_json_and_quiet_suppresses_stderr(project, capsys):
+    code, payload, err = cli(
+        ["baseline", _config(project), "--output-dir", project / "progress"], capsys
+    )
+    assert code == 0 and payload["status"] == "created"
+    assert "[baseline] starting" in err
+    assert "starting fold" in err and "completed fold" in err
+
+    code, payload, err = cli(
+        ["baseline", _config(project), "--output-dir", project / "quiet", "--quiet"], capsys
+    )
+    assert code == 0 and payload["status"] == "created"
+    assert err == ""
+
+
+def test_verbose_baseline_reports_native_support_without_polluting_json(project, capsys):
+    code, payload, err = cli(
+        ["baseline", _config(project), "--output-dir", project / "verbose", "--verbose"], capsys
+    )
+    assert code == 0 and payload["status"] == "created"
+    assert "native_verbosity=unsupported" in err
+    assert "hist_gradient_boosting" == payload["estimator"]
+
+
+def test_verbose_optional_adapters_keep_stdout_as_json(project, capsys):
+    from automl.estimators import estimator_available
+
+    installed = [name for name in ("lightgbm", "xgboost", "catboost") if estimator_available(name)]
+    if not installed:
+        pytest.skip("no supported optional boosting adapter is installed")
+    for estimator in installed:
+        code, payload, err = cli(
+            [
+                "baseline",
+                _config(project),
+                "--output-dir",
+                project / f"verbose-{estimator}",
+                "--estimator",
+                estimator,
+                "--verbose",
+            ],
+            capsys,
+        )
+        assert code == 0, err
+        assert payload["estimator"] == estimator
+        assert "native_verbosity=enabled" in err
+
+
+def test_quiet_mode_keeps_actionable_errors(project, capsys):
+    code, payload, err = cli(
+        [
+            "baseline",
+            _config(project),
+            "--output-dir",
+            project / "quiet-error",
+            "--estimator",
+            "not-an-estimator",
+            "--quiet",
+        ],
+        capsys,
+    )
+    assert code == 1 and payload is None
+    assert err.startswith("error:")
+    assert "[baseline]" not in err
+
+
+def test_progress_flags_are_mutually_exclusive(capsys):
+    cases = [
+        ["baseline", "run.toml", "--output-dir", "out"],
+        ["tune", "run.toml", "--output-dir", "out", "--n-trials", "1"],
+        ["ensemble", "run.toml", "a", "b", "--output-dir", "out"],
+        ["refit", "run.toml", "source", "--output-dir", "out"],
+        ["run", "run.toml", "--output-dir", "out"],
+    ]
+    for args in cases:
+        with pytest.raises(SystemExit) as exc:
+            main([*args, "--verbose", "--quiet"])
+        assert exc.value.code == 2
+        assert "not allowed with argument" in capsys.readouterr().err
+
+
 @pytest.mark.parametrize(
     ("n_jobs", "configured_jobs", "expected_jobs"),
     [(None, 1, 1), (None, 2, 2), (2, 1, 2)],
@@ -130,11 +211,13 @@ def test_ensemble_command_and_refit_use_saved_ensemble(
             "3",
             "--output-dir",
             str(output),
+            "--verbose",
             *(["--n-jobs", str(n_jobs)] if n_jobs is not None else []),
         ],
         capsys,
     )
     assert code == 0, err
+    assert "[ensemble] starting" in err
     assert payload["method"] == "stacking"
     assert len(payload["candidates"]) == 2
     assert (output / "ensemble.json").is_file() and (output / "ensemble.joblib").is_file()
@@ -151,10 +234,30 @@ def test_ensemble_command_and_refit_use_saved_ensemble(
     assert api_payload["mean"] == payload["mean"]
     assert api_payload["candidate_scores"] == payload["candidate_scores"]
 
+    quiet_code, quiet_payload, quiet_err = cli(
+        [
+            "ensemble",
+            _config(project),
+            str(baseline_a),
+            str(baseline_b),
+            "--method",
+            "stacking",
+            "--stack-cv",
+            "3",
+            "--output-dir",
+            project / "ensemble-quiet",
+            "--quiet",
+        ],
+        capsys,
+    )
+    assert quiet_code == 0 and quiet_payload["status"] == "created"
+    assert quiet_err == ""
+
     code, refit_payload, err = cli(
-        ["refit", _config(project), str(output), "--output-dir", str(project / "ensemble-refit")], capsys
+        ["refit", _config(project), str(output), "--output-dir", str(project / "ensemble-refit"), "--quiet"], capsys
     )
     assert code == 0, err
+    assert err == ""
     assert refit_payload["source_kind"] == "ensemble"
     assert refit_payload["n_test_rows"] == 30
 
@@ -248,10 +351,11 @@ def test_tune_families_then_resume(project, capsys):
     assert (out / "tuning_families.json").is_file()
     assert "n_trials=2" in err
 
-    code, payload, _ = cli(
-        ["tune", _config(project), "--output-dir", out, "--n-trials", 1, "--resume"], capsys
+    code, payload, err = cli(
+        ["tune", _config(project), "--output-dir", out, "--n-trials", 1, "--resume", "--quiet"], capsys
     )
     assert code == 0 and payload["status"] == "resumed"
+    assert err == ""
 
     code, _, err = cli(["tune", _config(project), "--output-dir", out, "--n-trials", 1], capsys)
     assert code == 1 and "--resume" in err
@@ -261,7 +365,7 @@ def test_tune_single_estimator(project, capsys):
     pytest.importorskip("optuna")
     out = project / "t"
     code, payload, _ = cli(
-        ["tune", _config(project), "--output-dir", out, "--estimator", FAMILY, "--n-trials", 2], capsys
+        ["tune", _config(project), "--output-dir", out, "--estimator", FAMILY, "--n-trials", 2, "--verbose"], capsys
     )
 
     assert code == 0
@@ -338,15 +442,17 @@ def test_refit_label_and_rank_are_exclusive_and_overwrite_needs_a_flag(project, 
     cli(["baseline", _config(project), "--output-dir", base], capsys)
     out = project / "refit"
 
-    code, payload, _ = cli(["refit", _config(project), base, "--output-dir", out], capsys)
+    code, payload, err = cli(["refit", _config(project), base, "--output-dir", out, "--verbose"], capsys)
     assert code == 0
+    assert "[refit] starting" in err
     assert payload["label"] == f"baseline:{FAMILY}" and payload["n_test_rows"] == 30
 
     code, _, err = cli(["refit", _config(project), base, "--output-dir", out], capsys)
     assert code == 1 and "--overwrite" in err
 
-    code, _, _ = cli(["refit", _config(project), base, "--output-dir", out, "--overwrite"], capsys)
+    code, _, err = cli(["refit", _config(project), base, "--output-dir", out, "--overwrite", "--quiet"], capsys)
     assert code == 0
+    assert err == ""
 
     with pytest.raises(SystemExit) as exc:
         main(["refit", _config(project), str(base), "--output-dir", str(out), "--label", "a", "--rank", "1"])
@@ -430,15 +536,41 @@ def test_run_matches_the_individual_stages(project, capsys, no_network):
 
 
 def test_run_skip_flags_use_the_baseline(project, capsys):
-    code, payload, _ = cli(
-        ["run", _config(project), "--output-dir", project / "run", "--skip-tuning", "--skip-reports"], capsys
+    code, payload, err = cli(
+        [
+            "run",
+            _config(project),
+            "--output-dir",
+            project / "run",
+            "--skip-tuning",
+            "--skip-reports",
+            "--verbose",
+        ],
+        capsys,
     )
 
     assert code == 0
+    assert "[run] starting stage_name=validate" in err
+    assert "[baseline] starting" in err and "[refit] starting" in err
     assert payload["selected"]["source"] == "baseline"
     assert set(payload["skipped"]) == {"eda_report", "model_report", "tuning"}
     assert not (project / "run" / "tuning").exists() and not (project / "run" / "reports").exists()
     assert (project / "run" / "submission" / "submission.csv").is_file()
+
+    code, quiet_payload, err = cli(
+        [
+            "run",
+            _config(project),
+            "--output-dir",
+            project / "quiet-run",
+            "--skip-tuning",
+            "--skip-reports",
+            "--quiet",
+        ],
+        capsys,
+    )
+    assert code == 0 and quiet_payload["status"] == "completed"
+    assert err == ""
 
 
 def test_run_refuses_a_non_empty_directory(project, capsys):
@@ -460,11 +592,12 @@ def test_run_stops_at_the_failing_stage_and_keeps_artifacts(project, capsys, mon
     monkeypatch.setattr(workflow, "submit", fail)
 
     code, _, err = cli(
-        ["run", _config(project), "--output-dir", project / "run", "--skip-tuning", "--skip-reports"], capsys
+        ["run", _config(project), "--output-dir", project / "run", "--skip-tuning", "--skip-reports", "--quiet"], capsys
     )
 
     assert code == 1
     assert "stage 'submission' failed after completing" in err and "refit" in err and "boom" in err
+    assert "[run]" not in err
     assert (project / "run" / "refit" / "predictions.csv").is_file()
     assert not (project / "run" / "submission").exists()
 

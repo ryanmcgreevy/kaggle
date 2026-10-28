@@ -29,9 +29,11 @@ from sklearn.model_selection import KFold, StratifiedKFold
 from sklearn.tree import DecisionTreeClassifier, DecisionTreeRegressor
 
 from automl.errors import DataContractError, EnsembleError, ReportError, TaskMetricError
+from automl.estimators import enable_native_verbosity
 from automl.metrics import Task, get_metric
 from automl.model_report import Candidate, CandidateSet, collect_candidates
 from automl.preprocessing import PreprocessingConfig, infer_columns
+from automl.progress import ProgressCallback, emit_progress
 from automl.refit import build_pipeline
 from automl.validation import SplitResult
 
@@ -343,7 +345,9 @@ def _meta_estimator(task: Task, config: EnsembleConfig, custom: Any = None) -> A
         raise EnsembleError(f"invalid parameters for meta-estimator {name!r}: {exc}") from None
 
 
-def _build_candidates(candidates: tuple[Candidate, ...], train: pd.DataFrame, target: str, ids, task, fallback_seed):
+def _build_candidates(
+    candidates: tuple[Candidate, ...], train: pd.DataFrame, target: str, ids, task, fallback_seed, verbose=False
+):
     estimators = []
     for idx, candidate in enumerate(candidates):
         build = candidate.build
@@ -363,6 +367,8 @@ def _build_candidates(candidates: tuple[Candidate, ...], train: pd.DataFrame, ta
             )
         except (DataContractError, KeyError, TypeError, ValueError) as exc:
             raise EnsembleError(f"cannot rebuild candidate {candidate.label!r}: {exc}") from None
+        if verbose:
+            enable_native_verbosity(pipeline.named_steps["model"])
         name = f"candidate_{idx}"
         wrapper = _CandidateRegressor if task is Task.REGRESSION else _CandidateClassifier
         estimators.append((name, wrapper(pipeline, params)))
@@ -414,6 +420,8 @@ def run_ensemble(
     labels: tuple[str, ...] | list[str] | None = None,
     meta_estimator: Any = None,
     directory: str | Path | None = None,
+    progress: ProgressCallback | None = None,
+    verbose: bool = False,
 ) -> EnsembleResult:
     """Evaluate a hard-voting or stacking ensemble from saved candidate directories.
 
@@ -471,19 +479,37 @@ def run_ensemble(
     feature_columns, feature_roles = _check_candidates(candidates, train, target, ids, task, metric_name, cfg)
     meta = _meta_estimator(task, cfg, meta_estimator)
     y = train[target].reset_index(drop=True)
+    progress_started = time.perf_counter()
+    if progress is not None:
+        emit_progress(
+            progress,
+            "ensemble",
+            "stage.start",
+            progress_started,
+            method=cfg.method,
+            candidates=len(candidates),
+            n_folds=len(splits.splits),
+        )
     fold_scores: list[float] = []
     candidate_scores: dict[str, list[float]] = {candidate.label: [] for candidate in candidates}
     fold_rows: list[EnsembleFold] = []
     for split in splits.splits:
+        if progress is not None:
+            emit_progress(progress, "ensemble", "fold.start", progress_started, fold=split.fold)
         fold_train = train.iloc[split.train_idx]
         fold_valid = train.iloc[split.valid_idx]
-        estimators = _build_candidates(candidates, fold_train, target, ids, task, cfg.seed)
+        estimators = _build_candidates(candidates, fold_train, target, ids, task, cfg.seed, verbose)
         model = _make_model(estimators, task, cfg, meta)
         X_train = fold_train.loc[:, feature_columns]
         y_train = fold_train[target]
         X_valid = fold_valid.loc[:, feature_columns]
         y_valid = fold_valid[target]
         try:
+            if progress is not None:
+                for candidate in candidates:
+                    emit_progress(
+                        progress, "ensemble", "model.start", progress_started, model=candidate.label, fold=split.fold
+                    )
             started = time.perf_counter()
             model.fit(X_train, y_train)
             fit_seconds = time.perf_counter() - started
@@ -498,6 +524,16 @@ def run_ensemble(
                         f"fold {split.fold}: candidate {candidate.label!r} returned a non-finite score"
                     )
                 candidate_scores[candidate.label].append(candidate_score)
+                if progress is not None:
+                    emit_progress(
+                        progress,
+                        "ensemble",
+                        "model.complete",
+                        progress_started,
+                        model=candidate.label,
+                        fold=split.fold,
+                        score=candidate_score,
+                    )
         except (ValueError, TypeError, TaskMetricError, EnsembleError) as exc:
             raise EnsembleError(f"fold {split.fold} failed: {exc}") from None
         if not np.isfinite(score):
@@ -506,10 +542,25 @@ def run_ensemble(
         fold_rows.append(
             EnsembleFold(split.fold, len(split.train_idx), len(split.valid_idx), score, fit_seconds, predict_seconds)
         )
-    full_estimators = _build_candidates(candidates, train, target, ids, task, cfg.seed)
+        if progress is not None:
+            emit_progress(
+                progress,
+                "ensemble",
+                "fold.complete",
+                progress_started,
+                fold=split.fold,
+                score=score,
+                fit_seconds=fit_seconds,
+                predict_seconds=predict_seconds,
+            )
+    full_estimators = _build_candidates(candidates, train, target, ids, task, cfg.seed, verbose)
     final_model = _make_model(full_estimators, task, cfg, meta)
     try:
+        if progress is not None:
+            emit_progress(progress, "ensemble", "fit.start", progress_started, scope="all_training_rows")
         final_model.fit(train.loc[:, feature_columns], y)
+        if progress is not None:
+            emit_progress(progress, "ensemble", "fit.complete", progress_started, scope="all_training_rows")
     except (ValueError, TypeError, TaskMetricError) as exc:
         raise EnsembleError(f"fitting the final ensemble on all training rows failed: {exc}") from None
     split_info = {
@@ -561,6 +612,8 @@ def run_ensemble(
     )
     if directory is not None:
         result = replace(result, directory=save_ensemble(result, directory))
+    if progress is not None:
+        emit_progress(progress, "ensemble", "stage.complete", progress_started, score=result.mean)
     return result
 
 

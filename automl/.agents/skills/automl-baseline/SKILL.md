@@ -16,6 +16,16 @@ Task, metric, and splits are settled and the user wants a first validated model 
 3. Use `--estimator <name>` to override `[baseline] estimator` (default `hist_gradient_boosting`; `lightgbm`, `xgboost`, `catboost` need their extra). Add `--track` only if the user approved MLflow and `[tracking]` exists.
 4. Read the JSON: `mean`, `std`, metric direction, `splits.source`, and artifact paths.
 
+Use the project interpreter described in `automl/AGENTS.md` for the CLI shorthand above. For example, from the repository root:
+
+```bash
+./automl/.venv/bin/python -m automl baseline ./playground-s6ep10/run.toml --output-dir ./playground-s6ep10/automl-runs/baseline
+```
+
+Substitute the requested competition/config and output paths. From the competition directory, the interpreter is `../automl/.venv/bin/python`; command-line paths are relative to that directory, unlike CSV paths inside the TOML.
+
+Progress is flushed to stderr by default; `--quiet` suppresses it, while `--verbose` also enables supported native estimator output. Stdout remains result JSON. Python API callers can pass an opt-in `ProgressEvent` callback; API calls are otherwise silent.
+
 ## Inputs
 
 Run TOML with `[task]` set, train CSV, optional `splits.json`; optional `[baseline]` and `[preprocessing]` tables.

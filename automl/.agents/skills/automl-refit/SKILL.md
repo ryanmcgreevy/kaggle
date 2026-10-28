@@ -16,6 +16,8 @@ The user has chosen (or accepts rank 1 of) a baseline, tuning, families, or ense
 3. Add `--overwrite` only after approval; `--track` only if MLflow was approved.
 4. Read the JSON for the selected label, estimator, and number of test rows.
 
+Progress is flushed to stderr by default; use `--quiet` to suppress it or `--verbose` to also enable supported estimator-native output. Stdout remains JSON. Python API callers may supply a `ProgressEvent` callback; calls are otherwise silent.
+
 ## Inputs
 
 Run TOML, train and test CSVs, and one saved result directory. Model candidates are rebuilt from saved parameters, preprocessing, and seed; an ensemble uses its full-data fitted `ensemble.joblib`.

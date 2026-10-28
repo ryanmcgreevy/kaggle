@@ -20,11 +20,13 @@ from automl.estimators import (
     ESTIMATOR_NAMES,
     FeatureLayout,
     controlled_param_problems,
+    enable_native_verbosity,
     get_estimator_spec,
     resolve_device,
 )
 from automl.metrics import Task
 from automl.preprocessing import PreprocessingConfig, build_preprocessor, infer_columns
+from automl.progress import ProgressCallback, emit_progress
 from automl.search_spaces import SPACE_FAMILIES, apply_overrides, get_search_space
 from automl.validation import SplitResult
 
@@ -336,16 +338,36 @@ def _prepare(train, target, id_columns, resolved_task, splits, cfg: TuningConfig
     )
 
 
-def _evaluate(setup: _Setup, params: dict[str, Any], on_fold: Callable[[list[float]], None] | None = None) -> list[float]:
+def _evaluate(
+    setup: _Setup,
+    params: dict[str, Any],
+    on_fold: Callable[[list[float]], None] | None = None,
+    *,
+    progress: ProgressCallback | None = None,
+    verbose: bool = False,
+) -> list[float]:
     cfg = setup.config
     est = setup.spec.make(
         setup.task, {**cfg.estimator_params, **params}, cfg.seed, cfg.n_jobs, setup.choice.effective, setup.layout
     )
+    if verbose:
+        enable_native_verbosity(est)
     pipeline = Pipeline([("pre", setup.pre), ("model", est)])
     scores: list[float] = []
+    fold_started = time.perf_counter()
     for split in setup.splits.splits:
         *_, rec = _run_fold(
-            pipeline, setup.X, setup.y, split, setup.task, setup.metric, setup.metric.needs, setup.fit_params
+            pipeline,
+            setup.X,
+            setup.y,
+            split,
+            setup.task,
+            setup.metric,
+            setup.metric.needs,
+            setup.fit_params,
+            progress,
+            fold_started,
+            "tuning",
         )
         scores.append(rec.score)
         if on_fold:
@@ -435,10 +457,30 @@ def categorize_failure(exc: BaseException) -> str:
     return "other"
 
 
-def _run(optuna, study, setup: _Setup, sampler_fn, n_trials, timeout) -> dict[str, Any]:
+def _run(
+    optuna,
+    study,
+    setup: _Setup,
+    sampler_fn,
+    n_trials,
+    timeout,
+    *,
+    progress: ProgressCallback | None = None,
+    verbose: bool = False,
+) -> dict[str, Any]:
     cfg = setup.config
 
     def objective(trial: Any) -> float:
+        trial_started = time.perf_counter()
+        if progress is not None:
+            emit_progress(
+                progress,
+                "tuning",
+                "trial.start",
+                trial_started,
+                model=cfg.estimator,
+                trial=trial.number,
+            )
         def on_fold(scores: list[float]) -> None:
             trial.set_user_attr("fold_scores", list(scores))
             if cfg.pruning and len(scores) < len(setup.splits.splits):
@@ -451,7 +493,7 @@ def _run(optuna, study, setup: _Setup, sampler_fn, n_trials, timeout) -> dict[st
             if not isinstance(params, dict):
                 raise TuningError("a callable search space must return a dict of estimator parameters")
             trial.set_user_attr("params", _plain(params))
-            scores = _evaluate(setup, params, on_fold)
+            scores = _evaluate(setup, params, on_fold, progress=progress, verbose=verbose)
             if not all(np.isfinite(scores)):
                 raise _NonFiniteScore("a fold score is not finite")
         except optuna.TrialPruned:
@@ -463,11 +505,49 @@ def _run(optuna, study, setup: _Setup, sampler_fn, n_trials, timeout) -> dict[st
             raise
         return float(np.mean(scores))
 
+    def report_trial(study: Any, trial: Any) -> None:
+        if progress is None:
+            return
+        completed = [item for item in study.trials if item.state.name == "COMPLETE" and item.value is not None]
+        best = None
+        if completed:
+            key = max if study.direction.name == "MAXIMIZE" else min
+            best = key(item.value for item in completed)
+        if trial.state.name == "COMPLETE":
+            emit_progress(
+                progress,
+                "tuning",
+                "trial.complete",
+                time.perf_counter() - (trial.duration.total_seconds() if trial.duration else 0),
+                model=cfg.estimator,
+                trial=trial.number,
+                score=trial.value,
+                best_score=best,
+                direction=study.direction.name.lower(),
+            )
+        else:
+            emit_progress(
+                progress,
+                "tuning",
+                "trial.pruned" if trial.state.name == "PRUNED" else "trial.failed",
+                time.perf_counter() - (trial.duration.total_seconds() if trial.duration else 0),
+                model=cfg.estimator,
+                trial=trial.number,
+                state=trial.state.name.lower(),
+                reason=trial.user_attrs.get("failure_reason"),
+            )
+
     previous = optuna.logging.get_verbosity()
     optuna.logging.set_verbosity(optuna.logging.ERROR)
     start = time.perf_counter()
     try:
-        study.optimize(objective, n_trials=n_trials, timeout=timeout, catch=(Exception,))
+        study.optimize(
+            objective,
+            n_trials=n_trials,
+            timeout=timeout,
+            catch=(Exception,),
+            callbacks=[report_trial] if progress is not None else None,
+        )
     finally:
         optuna.logging.set_verbosity(previous)
     elapsed = time.perf_counter() - start
@@ -533,6 +613,9 @@ def tune(
     preprocessing_config: PreprocessingConfig | None = None,
     directory: str | Path | None = None,
     tracking: Any = None,
+    *,
+    progress: ProgressCallback | None = None,
+    verbose: bool = False,
 ) -> TuningResult:
     """Tune one estimator with mean validation score over `splits`; persists to `directory` if given.
 
@@ -561,9 +644,31 @@ def tune(
         sampler=optuna.samplers.TPESampler(seed=config.seed),
         pruner=optuna.pruners.MedianPruner(n_startup_trials=PRUNER_STARTUP_TRIALS) if config.pruning else optuna.pruners.NopPruner(),
     )
-    budget = _run(optuna, study, setup, sampler_fn, config.n_trials, config.timeout_seconds)
+    progress_started = time.perf_counter()
+    if progress is not None:
+        emit_progress(
+            progress,
+            "tuning",
+            "stage.start",
+            progress_started,
+            model=config.estimator,
+            n_trials=config.n_trials,
+            timeout_seconds=config.timeout_seconds,
+        )
+    budget = _run(
+        optuna,
+        study,
+        setup,
+        sampler_fn,
+        config.n_trials,
+        config.timeout_seconds,
+        progress=progress,
+        verbose=verbose,
+    )
     result = _finish(_build_result(optuna, study, setup, space_desc, [budget], path))
     _track(tracking, result, train, target, id_columns, resolved_task, prep_cfg)
+    if progress is not None:
+        emit_progress(progress, "tuning", "stage.complete", progress_started, model=config.estimator)
     return result
 
 
@@ -579,6 +684,9 @@ def resume_tuning(
     space: SearchSpace | None = None,
     preprocessing_config: PreprocessingConfig | None = None,
     tracking: Any = None,
+    *,
+    progress: ProgressCallback | None = None,
+    verbose: bool = False,
 ) -> TuningResult:
     """Run additional trials on a saved study; the budget applies to the new trials only."""
     optuna = _require_optuna()
@@ -609,9 +717,32 @@ def resume_tuning(
     study.pruner = (
         optuna.pruners.MedianPruner(n_startup_trials=PRUNER_STARTUP_TRIALS) if config.pruning else optuna.pruners.NopPruner()
     )
-    budget = _run(optuna, study, setup, sampler_fn, n_trials, timeout_seconds)
+    progress_started = time.perf_counter()
+    if progress is not None:
+        emit_progress(
+            progress,
+            "tuning",
+            "stage.start",
+            progress_started,
+            model=config.estimator,
+            n_trials=n_trials,
+            timeout_seconds=timeout_seconds,
+            resumed=True,
+        )
+    budget = _run(
+        optuna,
+        study,
+        setup,
+        sampler_fn,
+        n_trials,
+        timeout_seconds,
+        progress=progress,
+        verbose=verbose,
+    )
     result = _finish(_build_result(optuna, study, setup, space_desc, [*saved.budgets, budget], path))
     _track(tracking, result, train, target, id_columns, resolved_task, prep_cfg, since_trial=len(saved.trials))
+    if progress is not None:
+        emit_progress(progress, "tuning", "stage.complete", progress_started, model=config.estimator, resumed=True)
     return result
 
 

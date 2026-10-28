@@ -27,6 +27,7 @@ from automl.estimators import (
     DEVICES,
     FeatureLayout,
     controlled_param_problems,
+    enable_native_verbosity,
     get_estimator_spec,
     list_estimators,
     resolve_device,
@@ -34,6 +35,7 @@ from automl.estimators import (
 from automl.metrics import Task, get_metric
 from automl.model_report import collect_candidates
 from automl.preprocessing import ColumnPlan, PreprocessingConfig, build_preprocessor, infer_columns
+from automl.progress import ProgressCallback, emit_progress
 
 REFIT_SCHEMA_VERSION = 1
 METADATA_FILE = "refit.json"
@@ -394,8 +396,13 @@ def refit(
     target: str,
     id_columns: tuple[str, ...] = (),
     resolved_task: Any,
+    progress: ProgressCallback | None = None,
+    verbose: bool = False,
 ) -> RefitPipeline:
     """Fit preprocessing and estimator together on every training row."""
+    progress_started = time.perf_counter()
+    if progress is not None:
+        emit_progress(progress, "refit", "stage.start", progress_started, model=selection.estimator)
     id_columns = tuple(id_columns)
     task = resolved_task.task
     problems: list[str] = []
@@ -447,7 +454,7 @@ def refit(
             excluded=tuple((*id_columns, target)),
         )
         classes = tuple(loaded.metadata.get("classes", ()))
-        return RefitPipeline(
+        result = RefitPipeline(
             pipeline=loaded.model,
             selection=selection,
             plan=plan,
@@ -460,6 +467,9 @@ def refit(
             device={"requested": "cpu", "effective": "cpu", "reason": "loaded saved ensemble", "note": None},
             native_categoricals=False,
         )
+        if progress is not None:
+            emit_progress(progress, "refit", "stage.complete", progress_started, source_kind="ensemble")
+        return result
     if task is not Task.REGRESSION and train[target].nunique() < 2:
         raise RefitError(f"target column '{target}' has fewer than two classes")
 
@@ -467,6 +477,7 @@ def refit(
         train, target, id_columns, task, selection.estimator, selection.params, selection.seed,
         selection.n_jobs, selection.device, selection.native_categoricals, selection.preprocessing_config,
     )
+    native_verbosity = enable_native_verbosity(pipeline.named_steps["model"]) if verbose else False
     features = [*plan.numeric, *plan.categorical]
     if selection.features is not None and features != list(selection.features):
         missing = sorted(set(selection.features) - set(features))
@@ -477,10 +488,19 @@ def refit(
             else "train column order differs from the selected result's features"
         )
     t0 = time.perf_counter()
+    if progress is not None:
+        emit_progress(
+            progress,
+            "refit",
+            "fit.start",
+            progress_started,
+            model=selection.estimator,
+            native_verbosity=("enabled" if native_verbosity else "unsupported") if verbose else None,
+        )
     pipeline.fit(train[features], train[target], **fit_params)
     seconds = time.perf_counter() - t0
     classes = tuple(np.asarray(pipeline.named_steps["model"].classes_).tolist()) if task is not Task.REGRESSION else ()
-    return RefitPipeline(
+    result = RefitPipeline(
         pipeline=pipeline,
         selection=selection,
         plan=plan,
@@ -493,13 +513,22 @@ def refit(
         device={"requested": choice.requested, "effective": choice.effective, "reason": choice.reason},
         native_categoricals=native,
     )
+    if progress is not None:
+        emit_progress(progress, "refit", "fit.complete", progress_started, fit_seconds=seconds)
+        emit_progress(progress, "refit", "stage.complete", progress_started)
+    return result
 
 
 # ---- prediction ----
 
 
 def predict(
-    fitted: RefitPipeline, test: pd.DataFrame, *, id_columns: tuple[str, ...] | None = None, config: RefitConfig | None = None
+    fitted: RefitPipeline,
+    test: pd.DataFrame,
+    *,
+    id_columns: tuple[str, ...] | None = None,
+    config: RefitConfig | None = None,
+    progress: ProgressCallback | None = None,
 ) -> PredictionResult:
     """Predict the test rows in order; validation failures raise before anything is returned."""
     cfg = config or RefitConfig()
@@ -520,6 +549,9 @@ def predict(
         raise RefitError(problems)
 
     X = test[fitted.features]
+    progress_started = time.perf_counter()
+    if progress is not None:
+        emit_progress(progress, "refit", "predict.start", progress_started, n_rows=len(test))
     notes: list[str] = []
     values = np.asarray(fitted.pipeline.predict(X))
     proba = None
@@ -543,7 +575,10 @@ def predict(
         for i, col in enumerate(proba_cols):
             frame[col] = proba[:, i]
     kind = "values" if fitted.task is Task.REGRESSION else ("labels+proba" if proba is not None else "labels")
-    return PredictionResult(frame, fitted.task, kind, len(frame), fitted.classes, proba_cols, ids, tuple(notes))
+    result = PredictionResult(frame, fitted.task, kind, len(frame), fitted.classes, proba_cols, ids, tuple(notes))
+    if progress is not None:
+        emit_progress(progress, "refit", "predict.complete", progress_started, n_rows=len(test))
+    return result
 
 
 def _rows(mask: np.ndarray, cfg: RefitConfig) -> str:
@@ -712,6 +747,8 @@ def refit_and_predict(
     directory: str | Path | None = None,
     overwrite: bool = False,
     tracking: Any = None,
+    progress: ProgressCallback | None = None,
+    verbose: bool = False,
 ) -> RefitResult:
     """Select, refit, predict, and optionally save and log to MLflow.
 
@@ -723,8 +760,16 @@ def refit_and_predict(
 
         _require_mlflow()
     selection = select_pipeline(source, label=label, rank=rank)
-    fitted = refit(selection, train, target=target, id_columns=id_columns, resolved_task=resolved_task)
-    preds = predict(fitted, test, config=cfg)
+    fitted = refit(
+        selection,
+        train,
+        target=target,
+        id_columns=id_columns,
+        resolved_task=resolved_task,
+        progress=progress,
+        verbose=verbose,
+    )
+    preds = predict(fitted, test, config=cfg, progress=progress)
     out = save_refit(fitted, preds, directory, config=cfg, overwrite=overwrite) if directory is not None else None
     tracked = None
     if tracking is not None and tracking.enabled:

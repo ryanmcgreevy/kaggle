@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from collections import Counter
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
@@ -14,6 +15,7 @@ import pandas as pd
 from automl.errors import TuningError
 from automl.estimators import ESTIMATOR_NAMES, estimator_available, get_estimator_spec
 from automl.preprocessing import PreprocessingConfig
+from automl.progress import ProgressCallback, emit_progress
 from automl.tuning import (
     RESULT_FILE,
     STUDY_FILE,
@@ -187,6 +189,9 @@ def tune_families(
     preprocessing_config: PreprocessingConfig | None = None,
     directory: str | Path | None = None,
     tracking: Any = None,
+    *,
+    progress: ProgressCallback | None = None,
+    verbose: bool = False,
 ) -> FamiliesResult:
     """Run one seeded study per family on identical splits and rank the best trials.
 
@@ -223,16 +228,30 @@ def tune_families(
         )
     outcomes: list[FamilyOutcome] = []
     for f in chosen:
+        family_started = time.perf_counter()
+        if progress is not None:
+            emit_progress(progress, "tuning", "model.start", family_started, model=f)
         try:
             res = tune(
                 train, target, id_columns, resolved_task, splits, configs[f],
                 space=(spaces or {}).get(f), preprocessing_config=preprocessing_config,
-                directory=parent / f if parent else None,
+                directory=parent / f if parent else None, progress=progress, verbose=verbose,
             )
             outcomes.append(FamilyOutcome(f, "complete", plan[f], res))
         except NoCompletedTrials as exc:
             res = load_tuning(parent / f) if parent and (parent / f / RESULT_FILE).is_file() else None
             outcomes.append(FamilyOutcome(f, "failed", plan[f], res, "; ".join(exc.problems)))
+        if progress is not None:
+            best = outcomes[-1].result.best if outcomes[-1].result is not None else None
+            emit_progress(
+                progress,
+                "tuning",
+                "model.complete",
+                family_started,
+                model=f,
+                status=outcomes[-1].status,
+                score=best.score if best is not None else None,
+            )
     result = _finalize(
         config, resolved_task.task.value, resolved_task.metric.name, resolved_task.metric.direction,
         plan, tuple(outcomes), parent,
@@ -301,6 +320,9 @@ def resume_tuning_families(
     spaces: dict[str, SearchSpace] | None = None,
     preprocessing_config: PreprocessingConfig | None = None,
     tracking: Any = None,
+    *,
+    progress: ProgressCallback | None = None,
+    verbose: bool = False,
 ) -> FamiliesResult:
     """Add trials to the saved per-family studies; budgets apply to the new trials only."""
     _require_optuna()
@@ -315,15 +337,31 @@ def resume_tuning_families(
     plan = _budget_plan(n_trials, timeout_seconds, {}, chosen, budgets)
     done: dict[str, FamilyOutcome] = {o.family: o for o in saved.outcomes}
     for f in chosen:
+        family_started = time.perf_counter()
+        if progress is not None:
+            emit_progress(progress, "tuning", "model.start", family_started, model=f, resumed=True)
         try:
             res = resume_tuning(
                 directory / f, train, target, id_columns, resolved_task, splits,
                 n_trials=plan[f]["n_trials"], timeout_seconds=plan[f]["timeout_seconds"],
                 space=(spaces or {}).get(f), preprocessing_config=preprocessing_config,
+                progress=progress, verbose=verbose,
             )
             done[f] = FamilyOutcome(f, "complete", plan[f], res)
         except NoCompletedTrials as exc:
             done[f] = FamilyOutcome(f, "failed", plan[f], load_tuning(directory / f), "; ".join(exc.problems))
+        if progress is not None:
+            best = done[f].result.best if done[f].result is not None else None
+            emit_progress(
+                progress,
+                "tuning",
+                "model.complete",
+                family_started,
+                model=f,
+                resumed=True,
+                status=done[f].status,
+                score=best.score if best is not None else None,
+            )
     ordered = tuple(done[o.family] for o in saved.outcomes)
     stored_plan = {o.family: o.budget for o in ordered}
     result = _finalize(saved.config, saved.task, saved.metric, saved.direction, stored_plan, ordered, directory)

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-import sys
+import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -30,6 +30,7 @@ from automl.estimators import ESTIMATOR_NAMES, estimator_available, get_estimato
 from automl.families import FAMILIES_FILE, resume_tuning_families, tune_families
 from automl.loader import DataBundle, load_data
 from automl.model_report import write_model_report
+from automl.progress import ProgressCallback, emit_progress
 from automl.refit import METADATA_FILE as REFIT_FILE
 from automl.refit import MODEL_FILE, PREDICTIONS_FILE, load_refit, refit_and_predict
 from automl.report import _require_matplotlib, write_eda_report
@@ -41,10 +42,6 @@ from automl.tuning import TuningConfig, _require_optuna, resume_tuning, tune
 from automl.validation import SplitResult, load_splits, make_splits, save_splits
 
 Log = Callable[[str], None]
-
-
-def _log(message: str) -> None:
-    print(message, file=sys.stderr)
 
 
 @dataclass(frozen=True)
@@ -215,6 +212,8 @@ def baseline(
     splits_path: str | Path | None = None,
     estimator: str | None = None,
     track: bool = False,
+    progress: ProgressCallback | None = None,
+    verbose: bool = False,
 ) -> dict[str, Any]:
     out = Path(output_dir)
     _new_dir(out, "baseline", BaselineError)
@@ -227,7 +226,9 @@ def baseline(
     splits, splits_info = _splits(ctx, splits_path)
     train, target, ids = ctx.bundle.train, ctx.config.target, _ids(ctx)
     prep = ctx.config.preprocessing_config
-    result = run_baseline(train, target, ids, ctx.resolved, splits, cfg, prep)
+    result = run_baseline(
+        train, target, ids, ctx.resolved, splits, cfg, prep, progress=progress, verbose=verbose
+    )
     save_baseline(result, out)
     tracked = None
     if tracking is not None:
@@ -300,7 +301,9 @@ def tune_stage(
     timeout_seconds: float | None = None,
     resume: bool = False,
     track: bool = False,
-    log: Log = _log,
+    log: Log | None = None,
+    progress: ProgressCallback | None = None,
+    verbose: bool = False,
 ) -> dict[str, Any]:
     if estimator is not None and families is not None:
         raise TuningError("use either --estimator (one estimator) or --families (several), not both")
@@ -315,13 +318,15 @@ def tune_stage(
     if resume:
         kind = _tuning_kind(out)
         splits, splits_info = _splits(ctx, splits_path)
-        log(f"resuming {kind} study in {out} with budget {_budget_text(n_trials, timeout_seconds)}")
+        if log is not None:
+            log(f"resuming {kind} study in {out} with budget {_budget_text(n_trials, timeout_seconds)}")
         if kind == "families":
             result = _tracked(
                 out,
                 lambda: resume_tuning_families(
                     out, train, target, ids, ctx.resolved, splits, n_trials=n_trials, timeout_seconds=timeout_seconds,
                     families=list(families) if families else None, preprocessing_config=prep, tracking=tracking,
+                    progress=progress, verbose=verbose,
                 ),
             )
         else:
@@ -329,7 +334,7 @@ def tune_stage(
                 out,
                 lambda: resume_tuning(
                     out, train, target, ids, ctx.resolved, splits, n_trials=n_trials, timeout_seconds=timeout_seconds,
-                    preprocessing_config=prep, tracking=tracking,
+                    preprocessing_config=prep, tracking=tracking, progress=progress, verbose=verbose,
                 ),
             )
         status = "resumed"
@@ -343,21 +348,28 @@ def tune_stage(
                 note = _not_installed_note()
                 if note:
                     notes.append(note)
-                    log(note)
-            log(f"tuning families {list(families or cfg.families or [n for n in ESTIMATOR_NAMES if estimator_available(n)])} "
-                f"with budget {_budget_text(cfg.n_trials, cfg.timeout_seconds)}")
+                    if log is not None:
+                        log(note)
+            if log is not None:
+                log(
+                    f"tuning families {list(families or cfg.families or [n for n in ESTIMATOR_NAMES if estimator_available(n)])} "
+                    f"with budget {_budget_text(cfg.n_trials, cfg.timeout_seconds)}"
+                )
             result = _tracked(
                 out,
                 lambda: tune_families(
-                    train, target, ids, ctx.resolved, splits, cfg, preprocessing_config=prep, directory=out, tracking=tracking
+                    train, target, ids, ctx.resolved, splits, cfg, preprocessing_config=prep, directory=out,
+                    tracking=tracking, progress=progress, verbose=verbose,
                 ),
             )
         else:
-            log(f"tuning {estimator} with budget {_budget_text(cfg.n_trials, cfg.timeout_seconds)}")
+            if log is not None:
+                log(f"tuning {estimator} with budget {_budget_text(cfg.n_trials, cfg.timeout_seconds)}")
             result = _tracked(
                 out,
                 lambda: tune(
-                    train, target, ids, ctx.resolved, splits, cfg, preprocessing_config=prep, directory=out, tracking=tracking
+                    train, target, ids, ctx.resolved, splits, cfg, preprocessing_config=prep, directory=out,
+                    tracking=tracking, progress=progress, verbose=verbose,
                 ),
             )
         status = "created"
@@ -404,6 +416,8 @@ def ensemble_stage(
     n_jobs: int | None = None,
     meta_estimator: str | None = None,
     meta_estimator_params: dict[str, Any] | None = None,
+    progress: ProgressCallback | None = None,
+    verbose: bool = False,
 ) -> dict[str, Any]:
     out = Path(output_dir)
     _new_dir(out, "ensemble", EnsembleError)
@@ -426,6 +440,8 @@ def ensemble_stage(
         config,
         labels=tuple(labels) if labels is not None else None,
         directory=out,
+        progress=progress,
+        verbose=verbose,
     )
     return _plain(
         {
@@ -493,6 +509,8 @@ def refit_stage(
     rank: int | None = None,
     overwrite: bool = False,
     track: bool = False,
+    progress: ProgressCallback | None = None,
+    verbose: bool = False,
 ) -> dict[str, Any]:
     out = Path(output_dir)
     existing = [n for n in (PREDICTIONS_FILE, REFIT_FILE, MODEL_FILE) if (out / n).exists()]
@@ -504,7 +522,7 @@ def refit_stage(
         lambda: refit_and_predict(
             str(source), ctx.bundle.train, ctx.bundle.test, target=ctx.config.target, id_columns=_ids(ctx),
             resolved_task=ctx.resolved, label=label, rank=rank, config=ctx.config.refit_config, directory=out,
-            overwrite=overwrite, tracking=tracking,
+            overwrite=overwrite, tracking=tracking, progress=progress, verbose=verbose,
         ),
     )
     sel = result.refit.selection
@@ -579,7 +597,9 @@ def run(
     skip_tuning: bool = False,
     skip_reports: bool = False,
     track: bool = False,
-    log: Log = _log,
+    log: Log | None = None,
+    progress: ProgressCallback | None = None,
+    verbose: bool = False,
 ) -> dict[str, Any]:
     """Compose every stage into subfolders of `output_dir`; stops at the first failing stage and keeps earlier files."""
     root = Path(output_dir)
@@ -603,19 +623,34 @@ def run(
     skipped: list[str] = []
     paths = {name: root / name for name in ("splits", "eda", "baseline", "tuning", "reports", "refit", "submission")}
 
+    progress_started = time.perf_counter()
+    if progress is not None:
+        emit_progress(progress, "run", "stage.start", progress_started, stage_name="run")
+
     def step(name: str, fn: Callable[[], Any]) -> Any:
-        log(f"[run] {name}")
+        if progress is not None:
+            emit_progress(progress, "run", "stage.start", progress_started, stage_name=name)
+        if log is not None:
+            log(f"[run] {name}")
         try:
             stages[name] = fn()
         except (DataContractError, OSError) as exc:
+            if progress is not None:
+                emit_progress(progress, "run", "stage.failed", progress_started, stage_name=name, error=str(exc))
             done = ", ".join(stages) or "none"
             raise RunError(
                 f"stage '{name}' failed after completing: {done}; completed artifacts are kept in {root}: {exc}"
             ) from None
+        if progress is not None:
+            emit_progress(progress, "run", "stage.complete", progress_started, stage_name=name)
         return stages[name]
 
     root.mkdir(parents=True, exist_ok=True)
+    if progress is not None:
+        emit_progress(progress, "run", "stage.start", progress_started, stage_name="validate")
     stages["validate"] = validate(ctx)
+    if progress is not None:
+        emit_progress(progress, "run", "stage.complete", progress_started, stage_name="validate")
     splits_file = paths["splits"] / "splits.json"
     step("split", lambda: split(ctx, paths["splits"]))
     step("eda", lambda: eda(ctx, paths["eda"]))
@@ -625,7 +660,10 @@ def run(
         step("eda_report", lambda: eda_report(ctx.config, paths["eda"] / "eda.json", paths["reports"]))
     step(
         "baseline",
-        lambda: baseline(ctx, paths["baseline"], splits_path=splits_file, estimator=estimator, track=track),
+        lambda: baseline(
+            ctx, paths["baseline"], splits_path=splits_file, estimator=estimator, track=track,
+            progress=progress, verbose=verbose,
+        ),
     )
     sources = [paths["baseline"]]
     if skip_tuning:
@@ -636,16 +674,20 @@ def run(
             lambda: tune_stage(
                 ctx, paths["tuning"], splits_path=splits_file, estimator=estimator, families=families,
                 n_trials=tuning_cfg.n_trials, timeout_seconds=tuning_cfg.timeout_seconds, track=track, log=log,
+                progress=progress, verbose=verbose,
             ),
         )
         sources.append(paths["tuning"])
     if not skip_reports:
         step("model_report", lambda: model_report(ctx, sources, paths["reports"]))
     refit_source = sources[-1]
-    step("refit", lambda: refit_stage(ctx, refit_source, paths["refit"], rank=1, track=track))
+    step(
+        "refit",
+        lambda: refit_stage(ctx, refit_source, paths["refit"], rank=1, track=track, progress=progress, verbose=verbose),
+    )
     step("submission", lambda: submit(ctx, paths["refit"], paths["submission"], track=track))
     refit_info = stages["refit"]
-    return {
+    result = {
         "status": "completed",
         "output_dir": str(root),
         "task": ctx.resolved.task.value,
@@ -659,3 +701,6 @@ def run(
         "skipped": skipped,
         "stages": stages,
     }
+    if progress is not None:
+        emit_progress(progress, "run", "stage.complete", progress_started, stage_name="run")
+    return result
