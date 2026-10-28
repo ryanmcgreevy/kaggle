@@ -82,6 +82,45 @@ def test_direction_both_ways():
     assert do_tune("binary", "log_loss")[3].direction == "minimize"
 
 
+@pytest.mark.parametrize(("metric", "direction"), [("roc_auc", "maximize"), ("log_loss", "minimize")])
+def test_progress_reports_directional_best_score(metric, direction):
+    events = []
+    _, _, _, result = do_tune(metric=metric, cfg=TuningConfig(n_trials=2), progress=events.append)
+    completions = [event for event in events if event.event == "trial.complete"]
+
+    assert len(completions) == 2
+    assert all(event.details["direction"] == direction for event in completions)
+    for index, event in enumerate(completions):
+        scores = [item.details["score"] for item in completions[: index + 1]]
+        expected = max(scores) if direction == "maximize" else min(scores)
+        assert event.details["best_score"] == pytest.approx(expected)
+        assert event.elapsed_seconds >= 0
+    assert any(event.event == "fold.start" for event in events)
+    assert any(event.event == "fold.complete" for event in events)
+
+
+def test_progress_reports_failed_trials():
+    events = []
+    df, resolved, splits = setup()
+
+    with pytest.raises(TuningError):
+        tune(
+            df,
+            "y",
+            ("id",),
+            resolved,
+            splits,
+            TuningConfig(n_trials=1),
+            space=lambda trial: {"not_a_parameter": 1},
+            progress=events.append,
+        )
+
+    failed = [event for event in events if event.event == "trial.failed"]
+    assert len(failed) == 1
+    assert failed[0].details["state"] == "fail"
+    assert "parameter" in failed[0].details["reason"]
+
+
 def test_builtin_space_and_registry_space():
     df, resolved, splits = setup()
     res = tune(df, "y", ("id",), resolved, splits, TuningConfig(n_trials=2))
@@ -246,8 +285,12 @@ def test_load_errors(tmp_path):
 def test_resume_adds_trials(tmp_path):
     d = tmp_path / "run"
     df, resolved, splits, first = do_tune(directory=d, cfg=TuningConfig(n_trials=3))
-    res = resume_tuning(d, df, "y", ("id",), resolved, splits, n_trials=2)
+    events = []
+    res = resume_tuning(d, df, "y", ("id",), resolved, splits, n_trials=2, progress=events.append)
     assert len(res.trials) == 5 and len(res.budgets) == 2
+    completed = [event for event in events if event.event == "trial.complete"]
+    assert [event.details["trial"] for event in completed] == [3, 4]
+    assert all(event.details["best_score"] is not None for event in completed)
     assert [t.score for t in res.trials[:3]] == [t.score for t in first.trials]
     assert len(load_tuning(d).trials) == 5
     assert res.best.score >= first.best.score

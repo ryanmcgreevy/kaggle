@@ -12,7 +12,7 @@ Starting a run, or any time the TOML, CSV files, target, ID columns, task, or me
 ## Procedure
 
 1. Inspect the run TOML and referenced files. Config-relative CSV paths resolve from the TOML file's directory.
-2. Run `automl validate run.toml` (or `python -m automl validate run.toml`).
+2. Resolve the project interpreter using `automl/AGENTS.md`, then run validation. From the repository root, an example is `./automl/.venv/bin/python -m automl validate ./playground-s6ep10/run.toml`; from that competition directory, use `../automl/.venv/bin/python -m automl validate run.toml`. Substitute the requested competition/config path. Do not assume bare `python` or `automl` is available.
 3. If task or metric is unset, present the resolver's suggestions and ask for confirmation. Update `[task]` with the confirmed values, then rerun validation. Never select suggestions automatically.
 4. Check the JSON result on stdout for `status`, target, task, metric, and train/test row counts. On failure, read stderr and address the named setting, file, or column.
 

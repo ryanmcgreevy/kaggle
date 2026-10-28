@@ -25,6 +25,7 @@ from automl.estimators import (
     FeatureLayout,
     controlled_param_problems,
     describe_estimator,
+    enable_native_verbosity,
     get_estimator_spec,
     resolve_device,
 )
@@ -37,6 +38,7 @@ from automl.preprocessing import (
     plan_from_dict,
     plan_to_dict,
 )
+from automl.progress import ProgressCallback, emit_progress
 from automl.validation import SplitResult
 
 ARTIFACT_VERSION = 2
@@ -152,7 +154,9 @@ def _prediction_kind(task: Task, needs: str) -> str:
     return "proba" if task is Task.MULTICLASS else "proba_positive"
 
 
-def _run_fold(pipeline, X, y, split, task, metric, needs, fit_params):
+def _run_fold(
+    pipeline, X, y, split, task, metric, needs, fit_params, progress=None, progress_started=None, progress_stage="baseline"
+):
     name = f"fold {split.fold}"
     X_tr, y_tr = X.iloc[split.train_idx], y.iloc[split.train_idx]
     X_va, y_va = X.iloc[split.valid_idx], y.iloc[split.valid_idx]
@@ -164,6 +168,14 @@ def _run_fold(pipeline, X, y, split, task, metric, needs, fit_params):
                 f"{sorted(map(str, valid_classes))}; use fewer folds or merge/remove rare classes"
             )
     model = clone(pipeline)
+    if progress is not None:
+        emit_progress(
+            progress,
+            progress_stage,
+            "fold.start",
+            progress_started if progress_started is not None else time.perf_counter(),
+            fold=split.fold,
+        )
     t0 = time.perf_counter()
     model.fit(X_tr, y_tr, **fit_params)
     fit_s = time.perf_counter() - t0
@@ -185,6 +197,17 @@ def _run_fold(pipeline, X, y, split, task, metric, needs, fit_params):
     if not math.isfinite(score):
         raise BaselineError(f"{name}: metric '{metric.name}' returned a non-finite score")
     classes = [str(c) for c in model.named_steps["model"].classes_] if task is not Task.REGRESSION else []
+    if progress is not None:
+        emit_progress(
+            progress,
+            progress_stage,
+            "fold.complete",
+            progress_started if progress_started is not None else time.perf_counter(),
+            fold=split.fold,
+            score=score,
+            fit_seconds=fit_s,
+            predict_seconds=predict_s,
+        )
     return model, pred, classes, FoldRecord(split.fold, len(y_tr), len(y_va), score, fit_s, predict_s)
 
 
@@ -197,6 +220,9 @@ def run_baseline(
     config: BaselineConfig | None = None,
     preprocessing_config: PreprocessingConfig | None = None,
     tracking: Any = None,
+    *,
+    progress: ProgressCallback | None = None,
+    verbose: bool = False,
 ) -> BaselineResult:
     """Fit one pipeline per split with the selected estimator and score validation rows with the resolved metric.
 
@@ -231,6 +257,7 @@ def run_baseline(
     plan = infer_columns(train, target, id_columns, prep_cfg)
     layout = FeatureLayout(len(plan.numeric), len(plan.categorical), native)
     estimator = make_estimator(task, cfg, layout, choice.effective)
+    native_verbosity = enable_native_verbosity(estimator) if verbose else False
     pre = build_preprocessor(plan, prep_cfg, task, native_categoricals=native)
     pipeline = Pipeline([("pre", pre), ("model", estimator)])
     fit_params = {f"model__{k}": v for k, v in spec.fit_params(layout).items()}
@@ -239,8 +266,25 @@ def run_baseline(
     needs = metric.needs
     # Boosting libraries use n_jobs as their own thread count, so only the scikit-learn baseline parallelizes folds.
     fold_jobs = cfg.n_jobs if spec.package is None else 1
-    results = Parallel(n_jobs=fold_jobs)(
-        delayed(_run_fold)(pipeline, X, y, s, task, metric, needs, fit_params) for s in splits.splits
+    progress_started = time.perf_counter()
+    if progress is not None:
+        emit_progress(
+            progress, "baseline", "stage.start", progress_started, model=spec.name, n_folds=len(splits.splits)
+        )
+        if verbose:
+            emit_progress(
+                progress,
+                "baseline",
+                "model.start",
+                progress_started,
+                model=spec.name,
+                native_verbosity="enabled" if native_verbosity else "unsupported",
+            )
+    results = Parallel(n_jobs=fold_jobs, prefer="threads" if progress is not None else None)(
+        delayed(_run_fold)(
+            pipeline, X, y, s, task, metric, needs, fit_params, progress, progress_started
+        )
+        for s in splits.splits
     )
 
     kind = _prediction_kind(task, needs)
@@ -300,6 +344,9 @@ def run_baseline(
             result, tracking, data=ModelData(train, target, tuple(id_columns), resolved_task),
             preprocessing_config=prep_cfg,
         )
+    if progress is not None:
+        emit_progress(progress, "baseline", "model.complete", progress_started, model=spec.name, score=result.mean)
+        emit_progress(progress, "baseline", "stage.complete", progress_started, score=result.mean)
     return result
 
 

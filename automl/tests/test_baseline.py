@@ -67,6 +67,46 @@ def test_each_task_default_metric(task):
     assert not res.oof.drop(columns=["row", "fold"]).isna().any().any()
 
 
+def test_progress_is_opt_in_for_python_api(capsys, monkeypatch):
+    df = make_frame("binary")
+    resolved = ResolvedTask(Task.BINARY, get_metric("roc_auc"))
+    splits = make_splits(df["y"], resolved, ValidationConfig(n_folds=3))
+    events = []
+    from sklearn.ensemble import HistGradientBoostingClassifier
+
+    original_fit = HistGradientBoostingClassifier.fit
+    fitted = []
+
+    def checked_fit(model, X, y, **kwargs):
+        assert any(event.event == "fold.start" for event in events)
+        fitted.append(True)
+        return original_fit(model, X, y, **kwargs)
+
+    monkeypatch.setattr(HistGradientBoostingClassifier, "fit", checked_fit)
+    result = run_baseline(df, "y", ("id",), resolved, splits, progress=events.append)
+    captured = capsys.readouterr()
+
+    assert captured.out == captured.err == ""
+    assert result.mean == pytest.approx(events[-1].details["score"])
+    assert [event.event for event in events].count("fold.start") == len(splits.splits)
+    assert [event.event for event in events].count("fold.complete") == len(splits.splits)
+    assert events[0].event == "stage.start" and events[-1].event == "stage.complete"
+    assert all(event.elapsed_seconds >= 0 for event in events)
+    assert len(fitted) == len(splits.splits)
+
+
+def test_progress_does_not_change_parallel_baseline_scores():
+    df = make_frame("binary")
+    resolved = ResolvedTask(Task.BINARY, get_metric("roc_auc"))
+    splits = make_splits(df["y"], resolved, ValidationConfig(n_folds=3))
+    config = BaselineConfig(n_jobs=2)
+    expected = run_baseline(df, "y", ("id",), resolved, splits, config)
+    observed = run_baseline(df, "y", ("id",), resolved, splits, config, progress=lambda event: None)
+
+    assert [fold.score for fold in observed.folds] == [fold.score for fold in expected.folds]
+    pd.testing.assert_frame_equal(observed.oof, expected.oof)
+
+
 @pytest.mark.parametrize("task", ["binary", "multiclass", "regression"])
 def test_every_builtin_metric(task):
     for name in list_metrics(task):

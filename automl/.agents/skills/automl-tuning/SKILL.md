@@ -17,6 +17,8 @@ A baseline exists or the user wants hyperparameter search for one estimator or s
 4. To add trials later, run the same command with `--resume` and the existing `--output-dir`; its budget counts new trials only and a changed config, data, or splits is rejected.
 5. Read the JSON: best family or trial, score, direction, failed trials with `failure_category`. Add `--track` only if the user approved MLflow.
 
+Progress is flushed to stderr by default and includes trial scores and best-so-far updates; `--quiet` suppresses progress and `--verbose` additionally enables supported estimator-native output. Stdout remains JSON, including when resuming. Python API callers may opt in with a `ProgressEvent` callback; calls are otherwise silent.
+
 ## Inputs
 
 Run TOML, train CSV, optional `splits.json`, a budget; optional `[tuning]` table for families, per-family ranges, and fixed parameters.

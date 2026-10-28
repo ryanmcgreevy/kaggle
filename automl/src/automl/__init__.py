@@ -58,6 +58,7 @@ from automl.preprocessing import (
     load_plan,
     save_plan,
 )
+from automl.progress import ProgressCallback, ProgressEvent
 from automl.refit import (
     LoadedRefit,
     PipelineSelection,
@@ -140,6 +141,8 @@ __all__ = [
     "PipelineSelection",
     "PredictionResult",
     "PreprocessingConfig",
+    "ProgressCallback",
+    "ProgressEvent",
     "PreprocessingError",
     "RefitConfig",
     "RefitError",

@@ -13,6 +13,15 @@ Use the same `automl` CLI and `automl` Python API as a person. Start with `autom
 - Refitting a selected model and test predictions: `automl-refit`.
 - `submission.csv`, sample-submission alignment: `automl-submission`.
 
+## Python environment and paths
+
+- From the repository root, use `./automl/.venv/bin/python -m automl`; from a sibling competition directory, use `../automl/.venv/bin/python -m automl`; from `automl/`, use `./.venv/bin/python -m automl`.
+- The existing `automl/.venv` contains the editable package installation. Do not assume bare `python` or `automl` is on PATH, or that system `python3` has the dependencies.
+- Skill commands written as `automl ...` are shorthand: replace that prefix with the project interpreter invocation above. Use the same interpreter for Python API calls.
+- Check the working directory before constructing relative paths. CSV paths in TOML resolve relative to the TOML; command-line config, artifact, and output paths resolve relative to the working directory.
+- Shell activation and directory changes do not necessarily persist between tool calls; use explicit interpreter paths and set the working directory in each command as needed.
+- If the environment is missing or imports fail, report the missing environment/dependency and follow the README setup instructions when installation is authorized. Do not work around it with system Python, `PYTHONPATH`, or global installs.
+
 ## Tool restriction
 
 Use only the existing `automl` CLI and Python API. Do not write new modeling, preprocessing, feature, metric, tuning, or submission code, and do not edit artifacts, predictions, or CSVs by hand, unless you first describe the proposed code and why the existing tools are insufficient and the user approves. Approved code goes where the user names, uses the public `automl` API where possible, and is not added to the `automl` package unless asked. This includes ad hoc scripts that read competition data. If a stage cannot do what is needed, say so instead of working around it.

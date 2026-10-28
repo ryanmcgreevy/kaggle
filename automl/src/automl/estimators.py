@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib
 import importlib.metadata
 import inspect
+import sys
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
@@ -162,10 +163,13 @@ class _LabelEncodedClassifier(BaseEstimator):
 class _CatBoostModel(BaseEstimator):
     """CatBoost with label encoding and native categorical columns built from ordinal codes."""
 
-    def __init__(self, classifier: bool, params: dict[str, Any], cat_idx: tuple[int, ...] = ()) -> None:
+    def __init__(
+        self, classifier: bool, params: dict[str, Any], cat_idx: tuple[int, ...] = (), native_output: bool = False
+    ) -> None:
         self.classifier = classifier
         self.params = params
         self.cat_idx = cat_idx
+        self.native_output = native_output
 
     def _frame(self, X: Any) -> pd.DataFrame:
         X = np.asarray(X, dtype=float)
@@ -184,14 +188,17 @@ class _CatBoostModel(BaseEstimator):
         from catboost import CatBoostClassifier, CatBoostRegressor
 
         kwargs = dict(self.params)
+        fit_kwargs = {"log_cout": sys.stderr, "log_cerr": sys.stderr} if self.native_output else {}
         if self.cat_idx:
             kwargs["cat_features"] = list(self.cat_idx)
         if self.classifier:
             encoder = LabelEncoder().fit(y)
             self.classes_ = encoder.classes_
-            self.model_ = CatBoostClassifier(**kwargs).fit(self._frame(X), encoder.transform(y))
+            self.model_ = CatBoostClassifier(**kwargs).fit(self._frame(X), encoder.transform(y), **fit_kwargs)
         else:
-            self.model_ = CatBoostRegressor(**kwargs).fit(self._frame(X), np.asarray(y, dtype=float))
+            self.model_ = CatBoostRegressor(**kwargs).fit(
+                self._frame(X), np.asarray(y, dtype=float), **fit_kwargs
+            )
         return self
 
     def predict_proba(self, X: Any) -> np.ndarray:
@@ -301,6 +308,24 @@ def describe_estimator(est: Any) -> tuple[str, dict[str, Any]]:
             params["cat_features"] = list(est.cat_idx)
         return name, params
     return type(est).__name__, est.get_params()
+
+
+def enable_native_verbosity(estimator: Any) -> bool:
+    """Enable an adapter's native training output, returning whether it is supported."""
+    if isinstance(estimator, _LabelEncodedClassifier):
+        estimator = estimator.estimator
+    if isinstance(estimator, _CatBoostModel):
+        estimator.params = {**estimator.params, "verbose": True}
+        estimator.native_output = True
+        return True
+    module = type(estimator).__module__.split(".")[0]
+    if module == "xgboost":
+        estimator.set_params(verbosity=2)
+        return True
+    if module == "lightgbm":
+        estimator.set_params(verbose=1)
+        return True
+    return False
 
 
 def list_estimators() -> list[str]:

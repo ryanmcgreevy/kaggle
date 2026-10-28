@@ -9,6 +9,12 @@ description: "Use when asked to run, plan, or resume the AutoML workflow for a t
 
 The user wants to go from train/test CSVs to analysis, models, reports, and a submission file, or asks which `automl` stage comes next. Load the stage skill named below for each stage's details.
 
+## Environment and invocation
+
+Follow `automl/AGENTS.md` to resolve the project interpreter before running any stage. All CLI commands below are shorthand for that interpreter's `-m automl` invocation, not an assumption that the CLI is on PATH. The stage-order examples assume the working directory contains `run.toml`; for a sibling competition directory such as `playground-s6ep10/`, replace `automl` with `../automl/.venv/bin/python -m automl`. From the repository root, use `./automl/.venv/bin/python -m automl` and prefix config/artifact/output paths with the competition directory.
+
+Use the same interpreter and explicit working-directory/path convention for every stage and Python API check; do not rely on shell activation persisting across tool calls.
+
 ## Stage order
 
 ```bash
@@ -43,6 +49,8 @@ automl submit run.toml runs/1/refit --output-dir runs/1/submission
 4. Choose a mode. Stage by stage lets the user inspect results and change decisions between stages (preferred when anything is ambiguous). `automl run run.toml --output-dir runs/2 --n-trials 30` runs every stage in one call; it needs a new or empty directory, has no `--overwrite`, and writes `splits/ eda/ baseline/ tuning/ reports/ refit/ submission/`. `--skip-tuning` refits the baseline; `--skip-reports` skips both PDFs.
 5. After tuning, show the user the model comparison and confirm which candidate to refit unless rank 1 is clearly intended. If ensembling is requested instead, use `automl-ensemble` to confirm candidate labels and method before running the ensemble stage.
 6. Finish by pointing the user to `submission.csv` for manual upload.
+
+`automl run` prints flushed progress to stderr while keeping JSON on stdout. `--quiet` suppresses progress but not errors; `--verbose` also enables supported estimator-native output. The Python `run` API is silent unless given an opt-in `ProgressEvent` callback.
 
 Optional, after the user confirms the ensemble method and candidates:
 

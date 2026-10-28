@@ -19,6 +19,8 @@ The user wants to combine at least two saved baseline, tuning, or model-family c
 5. Inspect `ensemble.json` for candidate and ensemble validation scores before choosing whether to use the ensemble.
 6. To predict test rows, run `automl refit run.toml runs/1/ensemble --output-dir runs/1/ensemble-refit`.
 
+Progress is flushed to stderr by default; use `--quiet` to suppress it or `--verbose` to also enable supported candidate-estimator native output. Stdout remains JSON. Python API calls accept an opt-in `ProgressEvent` callback and are otherwise silent.
+
 ## Inputs
 
 Run TOML with explicit task and metric, train/test CSVs, at least two baseline/tuning/families result directories, and optionally `splits.json`. Saved candidate parameters and preprocessing are used; hyperparameter searches do not run again. `--stack-cv` controls inner stacking folds. The default classifier meta-model is LogisticRegression; regression defaults to RidgeCV. Python callers may pass any cloneable scikit-learn meta-estimator to `run_ensemble`.

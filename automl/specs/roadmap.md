@@ -204,11 +204,15 @@ When identifiers are available, predictions must remain aligned to the correspon
 
 ## Phase 19: Training and Tuning Progress Output
 
-**Status:** Planned; next phase.
+**Status:** Complete (2026-10-28).
 
 **Deliverable:** Add consistent, immediately flushed CLI progress on stderr for baseline, tuning, ensembling, refitting, and the end-to-end workflow while keeping stdout reserved for machine-readable JSON. Default progress reports stage and model starts, fold starts and completions, elapsed time, and completed-trial validation scores with the best score so far. Add mutually exclusive `--verbose` and `--quiet` options: verbose additionally enables native estimator training output where supported; quiet suppresses progress but retains errors. Route native output away from stdout too. Reuse the same progress mechanism through an opt-in Python API without requiring terminal output from library callers.
 
 **Acceptance:** Local synthetic tests verify progress arrives before a long-running operation completes, default fold/trial messages include elapsed time and correctly directed best-score updates, and all relevant standalone commands and `run` honor verbose/quiet consistently. Captured stdout remains valid result JSON in every mode, including native estimator verbosity; stderr contains progress, and quiet mode retains actionable failures. Cover optional estimator adapters when installed, failed tuning trials, and resumed studies. Progress must not alter model parameters unrelated to logging, random seeds, splits, scores, persisted artifact contracts, or resume compatibility. Document supported native verbosity and its limits: training loss is not necessarily the selected validation metric, and iteration-level output is estimator-dependent. No new core dependency or competition data is required.
+
+**Specification:** [requirements](./2026-10-28-training-tuning-progress-output/requirements.md), [plan](./2026-10-28-training-tuning-progress-output/plan.md), [validation](./2026-10-28-training-tuning-progress-output/validation.md).
+
+**Verification:** Full suite passed: 625 passed, 1 GPU-dependent test skipped. Focused progress tests verify opt-in Python callbacks, immediate stderr flush, fold/trial lifecycle events, best-score direction, failed/resumed trials, quiet-mode errors, and stdout JSON isolation. Verbose baseline tests ran with LightGBM, XGBoost, and CatBoost installed and confirmed their native output does not contaminate stdout. No dependency or artifact schema changed.
 
 ## Later, Explicitly Optional Work
 
