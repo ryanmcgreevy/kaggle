@@ -4,7 +4,7 @@ This roadmap builds the workflow in small increments. Each phase should leave th
 
 ## Cross-Cutting Acceptance
 
-Every phase that introduces or changes a reusable capability must document its invocation and its inputs, outputs, assumptions, limits, and validation checks in the same increment. Keep the Python API usable independently; when a CLI command exists for the capability, document that invocation too. This guidance is for both people and agents and must use the same API/CLI, not an agent-only execution path.
+Every phase that introduces or changes a reusable capability must document its invocation and its inputs, outputs, assumptions, limits, and validation checks in the same increment. Keep the Python API usable independently; when a CLI command exists for the capability, document that invocation too. Until the Phase 22 migration is verified, this guidance is for both people and agents and must use the same API/CLI, not an agent-only execution path. Phase 22 changes the user-facing interface to skills and bundled scripts while retaining the shared Python core and its stage contracts.
 
 Stages should return structured results and persist machine-readable artifacts when they produce outputs needed by later stages. A later stage must be able to consume the documented result or artifact without relying on hidden in-memory state or rerunning unrelated work. Add focused tests for stage boundaries and artifact contracts as those boundaries are introduced.
 
@@ -237,6 +237,16 @@ Extend ensembling to load compatible saved members from either backend instead o
 **Specification:** [requirements](./2026-10-29-ensemble-evaluation-and-fit-paths/requirements.md), [plan](./2026-10-29-ensemble-evaluation-and-fit-paths/plan.md), [validation](./2026-10-29-ensemble-evaluation-and-fit-paths/validation.md).
 
 **Verification:** Full suite passed: 641 passed, 1 GPU-dependent test skipped. The focused ensemble/CLI suite passed: 55 passed. Fit-only coverage includes classification voting and stacking, regression stacking, absent outer splits, no scoring, artifact reload, refit prediction, CLI/API parity, stderr progress, and explicit split rejection. `compileall` and `git diff --check` passed.
+
+## Phase 22: Agents-Only Skills and Python Script Interface
+
+**Status:** Planned.
+
+**Deliverable:** Extend the existing agent implementation into an agents-only user-facing workflow using the standard Agent Skills format: each capability has a discoverable `SKILL.md`, associated executable Python scripts under `scripts/`, and references or assets where needed. Retain one shared, tested Python core for modeling, preprocessing, validation, persistence, and artifact handling; scripts must call that core rather than duplicate its logic. The agent owns workflow decisions and result interpretation, while Python enforces input, artifact, and execution invariants. Preserve independently callable stage APIs without requiring the CLI as the agent execution interface.
+
+**Plan:** Migrate incrementally, starting with baseline and tuning as representative script-backed skills, then cover intake, validation splits, EDA/reporting, model-family search, model comparison, ensembling, refit/prediction, and submission. Keep the CLI working during the transition and retire its entry points only after script/API parity and end-to-end coverage are verified. Resolve skill installation/discovery, interpreter and dependency setup, and paths independently of the caller's working directory. Update the mission, tech stack, README, agent router, and stage guidance to describe the new interface and its setup, replacing CLI-centric instructions when migration is complete. Do not rewrite the computational core or add new modeling capabilities as part of this phase.
+
+**Acceptance:** Validate standard skill metadata and resource references, and verify skill discovery in the supported opened workspace layout. Synthetic tests execute bundled scripts from both the project and a sibling competition directory, covering each stage and a full local workflow without competition data, credentials, network access, or mandatory optional dependencies. Compare script results against the existing API/CLI before retirement: preserve effective configuration, validation splits, scores within documented estimator tolerances, artifact schemas, fitted-model reload/reuse, tuning resume, predictions, and submission row/ID alignment. Preserve leakage-safe preprocessing and stacking, data/split fingerprints, trusted-model loading rules, overwrite protection, structured results, progress output, and actionable nonzero failures. Test missing dependencies and incompatible or corrupt artifacts explicitly. Agent guidance and scenario checks must retain confirmation gates for ambiguous task/metric choices, tuning budgets, model selection when unclear, overwrites, and optional tracking; keep enforceable safeguards in Python rather than relying solely on instructions. No automatic Kaggle submission, implicit upload, new tracking system, or duplicated per-skill modeling implementation.
 
 ## Later, Explicitly Optional Work
 
