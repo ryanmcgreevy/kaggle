@@ -33,6 +33,7 @@ from automl.estimators import (
     resolve_device,
 )
 from automl.metrics import Task, get_metric
+from automl.model_store import data_fingerprint, legacy_data_fingerprint, save_fitted_model
 from automl.model_report import collect_candidates
 from automl.preprocessing import ColumnPlan, PreprocessingConfig, build_preprocessor, infer_columns
 from automl.progress import ProgressCallback, emit_progress
@@ -131,6 +132,7 @@ class RefitPipeline:
     fit_seconds: float
     device: dict[str, Any]
     native_categoricals: bool
+    training_data_sha256: str
 
     @property
     def features(self) -> list[str]:
@@ -434,9 +436,10 @@ def refit(
             raise RefitError(
                 f"saved ensemble was fitted on {loaded.metadata.get('n_rows')} training rows; current data has {len(train)}"
             )
-        from automl.ensemble import data_fingerprint
-
-        if loaded.metadata.get("data_sha256") != data_fingerprint(train):
+        if loaded.metadata.get("data_sha256") not in {
+            data_fingerprint(train),
+            legacy_data_fingerprint(train),
+        }:
             raise RefitError("saved ensemble was fitted on different training data; recreate the ensemble for this run")
         missing = [column for column in selection.features or () if column not in train.columns]
         if missing:
@@ -466,6 +469,7 @@ def refit(
             fit_seconds=0.0,
             device={"requested": "cpu", "effective": "cpu", "reason": "loaded saved ensemble", "note": None},
             native_categoricals=False,
+            training_data_sha256=data_fingerprint(train),
         )
         if progress is not None:
             emit_progress(progress, "refit", "stage.complete", progress_started, source_kind="ensemble")
@@ -512,6 +516,7 @@ def refit(
         fit_seconds=seconds,
         device={"requested": choice.requested, "effective": choice.effective, "reason": choice.reason},
         native_categoricals=native,
+        training_data_sha256=data_fingerprint(train),
     )
     if progress is not None:
         emit_progress(progress, "refit", "fit.complete", progress_started, fit_seconds=seconds)
@@ -645,7 +650,13 @@ def _metadata(fitted: RefitPipeline, preds: PredictionResult, cfg: RefitConfig, 
             "categorical_handling": "native" if fitted.native_categoricals else "encoded",
             "fit_seconds": fitted.fit_seconds,
             "versions": {**_versions(), **fitted.selection.versions},
-            "files": {"predictions": PREDICTIONS_FILE, "metadata": METADATA_FILE, "model": MODEL_FILE if saved_model else None},
+            "files": {
+                "predictions": PREDICTIONS_FILE,
+                "metadata": METADATA_FILE,
+                "model": MODEL_FILE if saved_model else None,
+                "fitted_model": "fitted-model" if saved_model else None,
+            },
+            "model_reference": "fitted-model" if saved_model else None,
             "note": "Predictions are raw model outputs; validation scores in the selection are not leaderboard estimates.",
         }
     )
@@ -664,12 +675,15 @@ def save_refit(
     out = Path(directory)
     names = (PREDICTIONS_FILE, METADATA_FILE, MODEL_FILE)
     existing = [n for n in names if (out / n).exists()]
+    if (out / "fitted-model").exists():
+        existing.append("fitted-model")
     if existing and not overwrite:
         raise RefitError(f"{out} already contains {existing}; pass overwrite=True or choose another directory")
     out.mkdir(parents=True, exist_ok=True)
     meta = _metadata(fitted, predictions, cfg, predictions.n_rows, cfg.save_model)
     text = json.dumps(meta, indent=2, allow_nan=False)
     tmp = Path(tempfile.mkdtemp(prefix=".refit-", dir=out))
+    managed_names = (*names, "fitted-model")
     try:
         predictions.frame.to_csv(tmp / PREDICTIONS_FILE, index=False)
         (tmp / METADATA_FILE).write_text(text)
@@ -677,11 +691,45 @@ def save_refit(
             import joblib
 
             joblib.dump(fitted.pipeline, tmp / MODEL_FILE)
-        for name in names:
-            if (tmp / name).exists():
-                os.replace(tmp / name, out / name)
-            elif (out / name).exists():
-                (out / name).unlink()
+        if cfg.save_model:
+            save_fitted_model(
+                fitted.pipeline,
+                tmp / "fitted-model",
+                task=fitted.task.value,
+                metric=fitted.selection.metric,
+                direction=fitted.selection.direction,
+                feature_columns=fitted.features,
+                class_order=list(fitted.classes),
+                effective_config=fitted.selection.to_dict(),
+                dependency_versions={**_versions(), **fitted.selection.versions},
+                training_data_sha256=fitted.training_data_sha256,
+                n_training_rows=fitted.n_train,
+                overwrite=False,
+            )
+        backup = tmp / "backup"
+        backup.mkdir()
+        backed_up: list[str] = []
+        installed: list[str] = []
+        try:
+            for name in managed_names:
+                staged = tmp / name
+                destination = out / name
+                if destination.exists():
+                    os.replace(destination, backup / name)
+                    backed_up.append(name)
+                if staged.exists():
+                    os.replace(staged, destination)
+                    installed.append(name)
+        except Exception:
+            for name in reversed(installed):
+                destination = out / name
+                if destination.is_dir() and not destination.is_symlink():
+                    shutil.rmtree(destination)
+                else:
+                    destination.unlink(missing_ok=True)
+            for name in reversed(backed_up):
+                os.replace(backup / name, out / name)
+            raise
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
     return out

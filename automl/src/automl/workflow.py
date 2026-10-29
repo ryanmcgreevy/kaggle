@@ -13,7 +13,7 @@ from automl.baseline import RESULT_FILE as BASELINE_FILE
 from automl.baseline import run_baseline, save_baseline
 from automl.config import DataConfig, load_config
 from automl.eda import save_eda, summarize_bundle
-from automl.ensemble import EnsembleConfig, run_ensemble
+from automl.ensemble import EnsembleConfig, run_ensemble, run_saved_ensemble
 from automl.errors import (
     BaselineError,
     DataContractError,
@@ -89,6 +89,17 @@ def _tracking(ctx: RunContext, track: bool) -> TrackingConfig | None:
         )
     _require_mlflow()
     return replace(cfg, enabled=True)
+
+
+def _tracking_uri(ctx: RunContext) -> str | None:
+    cfg = ctx.config.tracking_config
+    if cfg is None:
+        return None
+    if cfg.tracking_uri:
+        return cfg.tracking_uri
+    if cfg.directory:
+        return f"sqlite:///{(Path(cfg.directory).expanduser().resolve() / 'mlflow.db')}"
+    return None
 
 
 def _tracked(where: Path, fn: Callable[[], Any]) -> Any:
@@ -247,6 +258,7 @@ def baseline(
         "mean": result.mean,
         "std": result.std,
         "n_folds": len(result.folds),
+        "model_reference": str(out / "fitted-model") if cfg.save_models else None,
         "splits": splits_info,
         "data": ctx.data_files,
         "notes": notes,
@@ -388,12 +400,18 @@ def tune_stage(
     }
     if kind == "families":
         payload["best_family"] = result.best_family
+        payload["model_references"] = {
+            outcome.family: str(out / outcome.family / "fitted-model")
+            for outcome in result.outcomes
+            if outcome.result is not None and outcome.result.best is not None
+        }
         payload["families"] = [
             {k: row.get(k) for k in ("family", "status", "rank", "best_score", "best_fold_std", "error")}
             for row in result.comparison
         ]
     else:
         best = result.best
+        payload["model_reference"] = str(out / "fitted-model") if result.model_reference else None
         payload["n_trials"] = len(result.trials)
         payload["best"] = (
             {"trial": best.number, "score": best.score, "std": best.fold_std, "params": best.params} if best else None
@@ -462,6 +480,58 @@ def ensemble_stage(
             "data": ctx.data_files,
         }
     )
+
+
+def ensemble_saved_stage(
+    ctx: RunContext,
+    model_references: Sequence[str | Path],
+    output_dir: str | Path,
+    *,
+    method: str = "stacking",
+    stack_cv: int = 5,
+    n_jobs: int | None = None,
+    meta_estimator: str | None = None,
+    meta_estimator_params: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Create an ensemble by reusing saved fitted-model references without refitting members."""
+    out = Path(output_dir)
+    _new_dir(out, "ensemble", EnsembleError)
+    config = EnsembleConfig(
+        method=method,
+        seed=ctx.config.baseline_config.seed,
+        n_jobs=ctx.config.baseline_config.n_jobs if n_jobs is None else n_jobs,
+        stack_cv=stack_cv,
+        meta_estimator=meta_estimator,
+        meta_estimator_params=meta_estimator_params or {},
+    )
+    result = run_saved_ensemble(
+        ctx.bundle.train,
+        ctx.config.target,
+        list(model_references),
+        ctx.resolved,
+        config,
+        directory=out,
+        tracking_uri=_tracking_uri(ctx),
+    )
+    payload: dict[str, Any] = {
+        "status": "created",
+        "directory": str(out),
+        "path": str(out / "ensemble.json"),
+        "model_path": str(out / "ensemble.joblib"),
+        "method": result.method,
+        "task": result.task.value,
+        "metric": result.metric,
+        "direction": result.direction,
+        "candidates": list(result.candidates),
+        "mean": result.mean,
+        "std": result.std,
+        "n_folds": len(result.folds),
+        "validation_status": result.validation_status,
+        "validation_limitation": result.validation_limitation,
+        "model_references": list(model_references),
+        "data": ctx.data_files,
+    }
+    return _plain(payload)
 
 
 def model_report(

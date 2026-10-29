@@ -20,11 +20,11 @@ STAGE_SKILLS = EXPECTED - {"automl-workflow"}
 HEADINGS = ("## Use when", "## Procedure", "## Inputs", "## Outputs", "## Assumptions and limits", "## Check")
 PRODUCES = {
     "automl-validation-splits": ("splits.json",),
-    "automl-baseline": ("baseline.json", "oof_predictions.csv"),
-    "automl-tuning": ("tuning_families.json",),
+    "automl-baseline": ("baseline.json", "oof_predictions.csv", "fitted-model/model.json"),
+    "automl-tuning": ("tuning_families.json", "hist_gradient_boosting/fitted-model/model.json"),
     "automl-model-report": ("model_report.pdf", "model_report_summary.json"),
     "automl-ensemble": ("ensemble.json", "ensemble.joblib"),
-    "automl-refit": ("predictions.csv", "refit.json", "pipeline.joblib"),
+    "automl-refit": ("predictions.csv", "refit.json", "pipeline.joblib", "fitted-model/model.json"),
     "automl-submission": ("submission.csv", "submission.json"),
 }
 

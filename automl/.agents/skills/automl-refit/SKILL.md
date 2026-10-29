@@ -24,11 +24,11 @@ Run TOML, train and test CSVs, and one saved result directory. Model candidates 
 
 ## Outputs
 
-`predictions.csv` (ID columns, `prediction`, `proba_<class>` columns, test row order), `refit.json` (selection, config, data summary, versions), and `pipeline.joblib` when `save_model` is true.
+`predictions.csv` (ID columns, `prediction`, `proba_<class>` columns, test row order), `refit.json` (selection, config, data summary, versions, relative model reference), `pipeline.joblib`, and the shared `fitted-model/` artifact when `save_model` is true.
 
 ## Assumptions and limits
 
-Task and metric must match the selected result. Test rows need every selected training feature; extra columns are ignored. Predictions are raw model outputs with no clipping or thresholding. Exact repeatability only on CPU. Any NaN, infinity, unseen label, or probability outside [0, 1] raises an error and writes nothing. `pipeline.joblib` and `ensemble.joblib` are pickles: load only from trusted runs. The validation score recorded in `refit.json` is optimistic and not a leaderboard estimate.
+Task and metric must match the selected result. Test rows need every selected training feature; extra columns are ignored. Predictions are raw model outputs with no clipping or thresholding. Exact repeatability only on CPU. Any NaN, infinity, unseen label, or probability outside [0, 1] raises an error and writes nothing. Joblib models are pickles: load only from trusted runs and matching dependency versions. The validation score recorded in `refit.json` is optimistic and not a leaderboard estimate.
 
 ## Check
 

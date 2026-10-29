@@ -9,7 +9,7 @@ Use the same `automl` CLI and `automl` Python API as a person. Start with `autom
 - Baseline models, `automl baseline`, boosting estimators: `automl-baseline`.
 - Optuna tuning, budgets, model families, resume: `automl-tuning`.
 - Model comparison PDF and best-model ranking: `automl-model-report`.
-- Hard-voting and stacking ensembles from saved model candidates: `automl-ensemble`.
+- Hard-voting/stacking from result candidates or saved fitted-model references: `automl-ensemble`.
 - Refitting a selected model and test predictions: `automl-refit`.
 - `submission.csv`, sample-submission alignment: `automl-submission`.
 

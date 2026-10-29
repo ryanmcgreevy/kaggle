@@ -25,6 +25,7 @@ from automl.estimators import (
     resolve_device,
 )
 from automl.metrics import Task
+from automl.model_store import capture_model_artifacts, data_fingerprint, save_fitted_model
 from automl.preprocessing import PreprocessingConfig, build_preprocessor, infer_columns
 from automl.progress import ProgressCallback, emit_progress
 from automl.search_spaces import SPACE_FAMILIES, apply_overrides, get_search_space
@@ -163,6 +164,7 @@ class TuningResult:
     versions: dict[str, str]
     notes: tuple[str, ...]
     directory: Path | None = None
+    model_reference: str | None = None
 
 
 def _require_optuna() -> Any:
@@ -602,6 +604,57 @@ def _finish(result: TuningResult) -> TuningResult:
     return result
 
 
+def _persist_best_model(result: TuningResult, setup: _Setup, *, overwrite: bool = False) -> TuningResult:
+    if result.directory is None or result.best is None:
+        return result
+    estimator = setup.spec.make(
+        setup.task,
+        {**setup.config.estimator_params, **result.best.params},
+        setup.config.seed,
+        setup.config.n_jobs,
+        setup.choice.effective,
+        setup.layout,
+    )
+    template = Pipeline([("pre", setup.pre), ("model", estimator)])
+    pipeline, oof = capture_model_artifacts(
+        template,
+        setup.X,
+        setup.y,
+        setup.splits,
+        task=setup.task.value,
+        fit_params=setup.fit_params,
+    )
+    save_fitted_model(
+        pipeline,
+        result.directory / "fitted-model",
+        task=result.task,
+        metric=result.metric,
+        direction=result.direction,
+        feature_columns=[*setup.plan.numeric, *setup.plan.categorical],
+        class_order=(
+            list(pipeline.named_steps["model"].classes_) if setup.task is not Task.REGRESSION else []
+        ),
+        effective_config={
+            "estimator": setup.config.estimator,
+            "estimator_params": {**setup.config.estimator_params, **result.best.params},
+            "preprocessing": asdict(setup.prep_cfg),
+            "seed": setup.config.seed,
+            "n_jobs": setup.config.n_jobs,
+            "device": setup.choice.effective,
+            "best_trial": result.best.number,
+        },
+        dependency_versions=result.versions,
+        training_data_sha256=data_fingerprint(setup.train),
+        n_training_rows=len(setup.train),
+        splits=setup.splits,
+        oof_predictions=oof,
+        overwrite=overwrite,
+    )
+    saved = replace(result, model_reference="fitted-model")
+    _write(saved)
+    return saved
+
+
 def tune(
     train: pd.DataFrame,
     target: str,
@@ -666,6 +719,7 @@ def tune(
         verbose=verbose,
     )
     result = _finish(_build_result(optuna, study, setup, space_desc, [budget], path))
+    result = _persist_best_model(result, setup)
     _track(tracking, result, train, target, id_columns, resolved_task, prep_cfg)
     if progress is not None:
         emit_progress(progress, "tuning", "stage.complete", progress_started, model=config.estimator)
@@ -740,6 +794,7 @@ def resume_tuning(
         verbose=verbose,
     )
     result = _finish(_build_result(optuna, study, setup, space_desc, [*saved.budgets, budget], path))
+    result = _persist_best_model(result, setup, overwrite=True)
     _track(tracking, result, train, target, id_columns, resolved_task, prep_cfg, since_trial=len(saved.trials))
     if progress is not None:
         emit_progress(progress, "tuning", "stage.complete", progress_started, model=config.estimator, resumed=True)
@@ -779,7 +834,8 @@ def _write(result: TuningResult) -> None:
         "trials": [_trial_to_dict(t) for t in result.trials],
         "versions": result.versions,
         "notes": list(result.notes),
-        "files": {"study": STUDY_FILE},
+        "files": {"study": STUDY_FILE, "fitted_model": result.model_reference},
+        "model_reference": result.model_reference,
     }
     final = result.directory / RESULT_FILE
     tmp = final.with_suffix(".json.tmp")
@@ -832,6 +888,7 @@ def load_tuning(directory: str | Path) -> TuningResult:
             versions=raw["versions"],
             notes=tuple(raw["notes"]),
             directory=directory,
+            model_reference=raw.get("model_reference"),
         )
     except TuningError as exc:
         if str(exc).startswith(label):

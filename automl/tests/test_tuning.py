@@ -258,7 +258,7 @@ def test_holdout_strategy():
 def test_persistence_roundtrip_and_no_overwrite(tmp_path, monkeypatch):
     d = tmp_path / "run"
     _, _, _, res = do_tune(directory=d)
-    assert sorted(p.name for p in d.iterdir()) == ["study.db", "tuning.json"]
+    assert sorted(p.name for p in d.iterdir()) == ["fitted-model", "study.db", "tuning.json"]
     json.loads((d / "tuning.json").read_text())
     monkeypatch.setitem(sys.modules, "optuna", None)  # loading must not need optuna
     loaded = load_tuning(d)

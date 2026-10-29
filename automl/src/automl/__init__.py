@@ -20,6 +20,7 @@ from automl.errors import (
     TuningError,
     TuningUnavailableError,
     ValidationSplitError,
+    ModelStoreError,
 )
 from automl.ensemble import (
     EnsembleConfig,
@@ -28,7 +29,16 @@ from automl.ensemble import (
     LoadedEnsemble,
     load_ensemble,
     run_ensemble,
+    run_saved_ensemble,
     save_ensemble,
+)
+from automl.model_store import (
+    FittedModelReference,
+    LoadedFittedModel,
+    data_fingerprint,
+    load_fitted_model,
+    save_fitted_model,
+    split_fingerprint,
 )
 from automl.estimators import estimator_available, get_estimator_spec, list_estimators, resolve_device
 from automl.families import (
@@ -90,7 +100,15 @@ from automl.task import (
     suggest_metric,
     suggest_task,
 )
-from automl.tracking import ModelData, TrackingConfig, TrackingResult, track_baseline, track_families, track_tuning
+from automl.tracking import (
+    ModelData,
+    TrackingConfig,
+    TrackingResult,
+    track_baseline,
+    track_families,
+    track_fitted_model,
+    track_tuning,
+)
 from automl.tuning import (
     TrialRecord,
     TuningConfig,
@@ -128,6 +146,9 @@ __all__ = [
     "Metric",
     "LoadedRefit",
     "LoadedEnsemble",
+    "LoadedFittedModel",
+    "FittedModelReference",
+    "ModelStoreError",
     "LoadedSubmission",
     "SubmissionConfig",
     "SubmissionError",
@@ -188,6 +209,7 @@ __all__ = [
     "load_data",
     "load_eda",
     "load_ensemble",
+    "load_fitted_model",
     "load_plan",
     "load_refit",
     "load_splits",
@@ -204,9 +226,11 @@ __all__ = [
     "resume_tuning_families",
     "run_baseline",
     "run_ensemble",
+    "run_saved_ensemble",
     "save_baseline",
     "save_eda",
     "save_ensemble",
+    "save_fitted_model",
     "save_plan",
     "save_refit",
     "save_splits",
@@ -216,8 +240,11 @@ __all__ = [
     "suggest_task",
     "summarize",
     "summarize_bundle",
+    "data_fingerprint",
+    "split_fingerprint",
     "track_baseline",
     "track_families",
+    "track_fitted_model",
     "track_tuning",
     "tune",
     "tune_families",

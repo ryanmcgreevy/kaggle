@@ -8,6 +8,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from automl import TrackingConfig, load_fitted_model, track_fitted_model
 from automl.cli import build_parser, main
 from automl.workflow import ensemble_stage, load_run
 
@@ -83,7 +84,8 @@ def test_help_lists_every_command(capsys):
 
     assert exc.value.code == 0
     for name in (
-        "validate", "split", "eda", "report", "baseline", "tune", "model-report", "ensemble", "refit", "submit", "run"
+        "validate", "split", "eda", "report", "baseline", "tune", "model-report", "ensemble", "ensemble-saved",
+        "refit", "submit", "run"
     ):
         assert name in out
 
@@ -267,6 +269,77 @@ def test_ensemble_parser_accepts_all_available_cores():
         ["ensemble", "run.toml", "source-a", "source-b", "--output-dir", "ensemble", "--n-jobs", "-1"]
     )
     assert args.n_jobs == -1
+
+
+def test_ensemble_saved_cli_reports_stacking_validation_limit(project, capsys):
+    baseline_a, baseline_b = project / "baseline-a", project / "baseline-b"
+    assert cli(["baseline", _config(project), "--output-dir", baseline_a], capsys)[0] == 0
+    assert cli(["baseline", _config(project), "--output-dir", baseline_b], capsys)[0] == 0
+
+    output = project / "saved-ensemble"
+    code, payload, err = cli(
+        [
+            "ensemble-saved",
+            _config(project),
+            str(baseline_a / "fitted-model"),
+            str(baseline_b / "fitted-model"),
+            "--method",
+            "stacking",
+            "--output-dir",
+            str(output),
+        ],
+        capsys,
+    )
+
+    assert code == 0, err
+    assert payload["status"] == "created"
+    assert payload["mean"] is None
+    assert payload["validation_status"] == "unavailable"
+    assert payload["validation_limitation"]
+    assert len(payload["model_references"]) == 2
+    assert (output / "ensemble.json").is_file()
+
+
+def test_ensemble_saved_cli_uses_configured_mlflow_store(project, capsys):
+    pytest.importorskip("mlflow")
+    baseline_a, baseline_b = project / "baseline-a", project / "baseline-b"
+    assert cli(["baseline", _config(project), "--output-dir", baseline_a], capsys)[0] == 0
+    assert cli(["baseline", _config(project), "--output-dir", baseline_b], capsys)[0] == 0
+
+    tracking_directory = project / "mlflow-store"
+    tracking = TrackingConfig(directory=str(tracking_directory))
+    references = []
+    for baseline in (baseline_a, baseline_b):
+        stored = load_fitted_model(baseline / "fitted-model")
+        references.append(
+            track_fitted_model(
+                stored.pipeline,
+                stored.metadata,
+                tracking,
+                oof_predictions=stored.oof_predictions,
+            ).uri
+        )
+    with (project / "run.toml").open("a") as config:
+        config.write(f'\n[tracking]\ndirectory = "{tracking_directory}"\n')
+
+    output = project / "saved-mlflow-ensemble"
+    code, payload, err = cli(
+        [
+            "ensemble-saved",
+            _config(project),
+            *references,
+            "--method",
+            "stacking",
+            "--output-dir",
+            str(output),
+        ],
+        capsys,
+    )
+
+    assert code == 0, err
+    assert payload["validation_status"] == "unavailable"
+    assert payload["mean"] is None
+    assert len(payload["model_references"]) == 2
 
 
 @pytest.mark.parametrize("n_jobs", [0, -2])

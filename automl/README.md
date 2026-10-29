@@ -238,6 +238,7 @@ max_iter = 200
 - Model inputs are the typed numeric and categorical columns only; the target, ID, and dropped columns never reach the model. Preprocessing is fit inside each fold. With `preprocessing_config=None` the encoder is ordinal; pass `cfg.preprocessing_config` to use the run config. Encoded categoricals are treated as numeric.
 - Metrics receive `predict_proba` when `needs="proba"` (positive-class column for binary) and `predict` otherwise. Each classification fold must see the same classes in train and validation rows, otherwise the error names the fold.
 - Out-of-fold predictions: k-fold covers every row once; holdout covers validation rows only. Scores are validation scores under the declared split, not leaderboard claims; `std` is the population standard deviation across folds.
+- When `save_models=true`, saving the result also writes `fitted-model/` with the complete pipeline fitted on all training rows and the aligned OOF predictions. This adds one full-data fit; use the stable `fitted-model` reference to reuse the model without refitting.
 
 ```python
 from automl import (
@@ -334,7 +335,7 @@ result = resume_tuning("runs/tuning", bundle.train, cfg.target, cfg.id_columns, 
 result = load_tuning("runs/tuning")        # reads tuning.json only; no Optuna needed
 ```
 
-Artifact directory (created by `directory=`; an existing directory is refused): `study.db` (Optuna SQLite storage) and `tuning.json` (`schema_version` 2; schema 1 files still load, with failed trials categorized `other`: `task`, `metric`, `config`, `space`, `fingerprint`, `budgets` (one entry per run), `best_trial`, `trials` with `number`/`state`/`params`/`score`/`fold_scores`/`fold_std`/`duration_seconds`/`failure_reason`/`failure_category`, `versions`, `notes`). No training data is stored, nothing leaves the directory, and no network access is used. `resume_tuning` adds trials to the same study; its `n_trials`/`timeout_seconds` budget applies to the new trials only. It checks a fingerprint (rows, features, target, metric, estimator, seed, fixed parameters, preprocessing, and a hash of the split indices) and raises `TuningError` naming any difference. Mapping spaces are saved and reused; a callable space is not serializable and must be passed again. A resumed study reseeds the sampler as `seed + number of existing trials`. CLI: `automl tune --estimator ...` and `--resume`.
+Artifact directory (created by `directory=`; an existing directory is refused): `study.db` (Optuna SQLite storage), `tuning.json` (`schema_version` 2; schema 1 files still load, with failed trials categorized `other`: `task`, `metric`, `config`, `space`, `fingerprint`, `budgets` (one entry per run), `best_trial`, `trials` with `number`/`state`/`params`/`score`/`fold_scores`/`fold_std`/`duration_seconds`/`failure_reason`/`failure_category`, `versions`, `notes`), and `fitted-model/` when `directory=` is provided. Saving the best trial's OOF predictions and full-data pipeline performs additional fold refits and one full-data fit after the search. No training data is stored, nothing leaves the directory, and no network access is used. `resume_tuning` adds trials to the same study; its `n_trials`/`timeout_seconds` budget applies to the new trials only. It checks a fingerprint (rows, features, target, metric, estimator, seed, fixed parameters, preprocessing, and a hash of the split indices) and raises `TuningError` naming any difference. Mapping spaces are saved and reused; a callable space is not serializable and must be passed again. A resumed study reseeds the sampler as `seed + number of existing trials`. CLI: `automl tune --estimator ...` and `--resume`.
 
 ## Model-Family Search Spaces
 
@@ -377,7 +378,7 @@ res = load_tuning_families("runs/families")   # no Optuna needed
 res = resume_tuning_families("runs/families", bundle.train, cfg.target, cfg.id_columns, resolved, splits, n_trials=10)
 ```
 
-Artifacts: `<directory>/<family>/` holds the single-study `study.db` and `tuning.json`; `<directory>/tuning_families.json` (`schema_version` 1) holds `task`, `metric`, `config`, `budget_plan` (written before any trial runs), `families` (status, directory, error), `comparison`, `best_family`, and `notes`. An existing directory is refused. Family scores are search-selected validation means, optimistically biased, and are not leaderboard claims. CLI: `automl tune` (families by default).
+Artifacts: `<directory>/<family>/` holds the single-study `study.db`, `tuning.json`, and `fitted-model/`; `<directory>/tuning_families.json` (`schema_version` 1) holds `task`, `metric`, `config`, `budget_plan` (written before any trial runs), `families` (status, directory, error), `comparison`, `best_family`, and `notes`. Saving each family's best-model OOF predictions and full-data pipeline performs additional fold refits and one full-data fit after the search. An existing directory is refused. Family scores are search-selected validation means, optimistically biased, and are not leaderboard claims. CLI: `automl tune` (families by default).
 
 ## Optional MLflow Tracking
 
@@ -400,9 +401,9 @@ Destination: `tracking_uri` if set, otherwise a SQLite store `<directory>/mlflow
 
 Layout: a baseline is one run. A tuning study is a parent run (config, direction, counts, `best_score`, best parameters, `tuning.json`) with one nested run per trial (`param.*`, `score`, `fold_score` by step, `fold_std`, `duration_seconds`, `automl.trial_state`, failure reason and category, `automl.is_best`). `track_families` logs a top-level run (`rank.<family>` params, `automl.best_family`, `tuning_families.json`) with a nested run per family that holds its trial runs. `resume_tuning(tracking=...)` logs only the added trials and tags `automl.since_trial`; `resume_tuning_families` logs the full families again. Logging a saved result twice creates a second run. Truncated trials are counted in `automl.trials_not_logged`; the full history is always in the JSON artifact.
 
-Model: with training data available (`run_baseline`, `tune`, and `tune_families` supply it; `track_*` takes `data=ModelData(train, target, id_columns, resolved_task)`), the complete preprocessing-plus-estimator pipeline is refit on all training rows, with the best trial's parameters for tuned runs (best family for families), and logged with `mlflow.sklearn` (cloudpickle, plus an inferred signature but no input example); its URI is in `TrackingResult.model_uri` and the `automl.model_uri` tag. This refit exists for logging only and is not the Phase 14 selected-model contract. The pipeline is a pickle, so load models only from stores you trust, and set the tracking URI first (`mlflow.set_tracking_uri(...)`) because model URIs resolve through the store. LightGBM, XGBoost, CatBoost, and scikit-learn pipelines were verified. When the model is skipped (`log_model = false`, no data, or a library problem), the reason is in `TrackingResult.notes` and the `automl.notes` tag.
+Model: with training data available (`run_baseline`, `tune`, and `tune_families` supply it; `track_*` takes `data=ModelData(train, target, id_columns, resolved_task)`), the complete preprocessing-plus-estimator pipeline is refit on all training rows, with the best trial's parameters for tuned runs (best family for families), and logged with `mlflow.sklearn` (cloudpickle, plus an inferred signature but no input example); its URI is in `TrackingResult.model_uri` and the `automl.model_uri` tag. Separately, `track_fitted_model` logs a persisted fitted-model artifact, including metadata and optional OOF predictions, and returns a stable `runs:/<run-id>/model` reference for `load_fitted_model`. When using this reference in an ensemble CLI command, configure `[tracking].tracking_uri` or `[tracking].directory` in the run TOML. Model files are pickles: load only from stores you trust, and use matching dependency versions. LightGBM, XGBoost, CatBoost, and scikit-learn pipelines were verified. When the model is skipped (`log_model = false`, no data, or a library problem), the reason is in `TrackingResult.notes` and the `automl.notes` tag.
 
-Privacy: no data rows, predictions, sample submissions, input examples, or environment variables are logged. Logged scores are validation estimates, optimistically biased for tuned runs, and not leaderboard claims.
+Privacy: the baseline/tuning/refit/submission tracking stages do not log raw data rows, test predictions, sample submissions, input examples, or environment variables. `track_fitted_model` logs positional OOF predictions (`row`, `fold`, `prediction`, and optional probabilities) only when explicitly requested, so saved ensembles can reuse them; it does not log feature rows or identifiers. Logged scores are validation estimates, optimistically biased for tuned runs, and not leaderboard claims.
 
 ```python
 from automl import TrackingConfig, ModelData, tune, track_tuning
@@ -549,6 +550,15 @@ automl ensemble run.toml runs/1/baseline runs/1/tuning \
 automl refit run.toml runs/1/ensemble --output-dir runs/1/refit
 ```
 
+To reuse already-fitted pipelines without refitting ensemble members, pass at least two fitted-model references to `ensemble-saved`:
+
+```bash
+automl ensemble-saved run.toml runs/1/baseline/fitted-model runs/1/tuning/fitted-model \
+  --method voting --output-dir runs/1/saved-ensemble
+```
+
+Hard voting uses saved fold-excluded predictions and performs zero fits. Saved stacking trains only its meta-estimator from complete, compatible OOF predictions; its validation score is unavailable because scoring the same OOF rows would reuse meta-model training data. Both methods use saved full-data pipelines for inference. Saved references must match the current training-data fingerprint, feature schema, classes, and split provenance; mismatches fail instead of triggering member refits.
+
 Classification supports `--method voting` (hard majority vote) and `--method stacking`; regression supports stacking only. The default stacking meta-model is LogisticRegression for classification and RidgeCV for regression. Choose a different supported meta-estimator with `--meta-estimator` and optional JSON `--meta-estimator-params`. Use `--label` repeatedly to select candidate labels; otherwise all compatible candidates from the supplied directories are used. When selecting labels, obtain them from `collect_candidates` or the `model-report` summary. Hard voting uses predicted class labels and class ordering breaks ties; probability metrics other than binary ROC AUC require stacking.
 
 Use `--n-jobs 2` to request two parallel jobs within stacking/voting, or `--n-jobs -1` for all available cores. Without the flag, `[baseline].n_jobs` is used (default `1`), preserving existing behavior. Outer validation folds remain sequential. This setting does not override the saved candidate models' thread counts or meta-estimator parameters. Parallel workers increase memory use; combining many workers with multi-threaded candidate models can oversubscribe CPUs, so choose a bounded worker count when resources are shared.
@@ -571,7 +581,7 @@ result.mean, result.std, result.candidates
 
 The JSON artifact (`ensemble.json`, schema version 1) records candidates, per-fold and summary metrics, split settings, feature columns and roles, task/metric, and the data fingerprint. `ensemble.joblib` contains the final model fitted on all rows; it is a pickle and should be loaded only from a trusted directory. `load_ensemble` reads metadata without deserializing the model; pass `load_model=True` only for trusted artifacts. `automl refit` accepts the ensemble directory and rejects a different training dataset. Existing output directories are not overwritten.
 
-Limits: validation scores are optimistic after candidate/ensemble selection and are not leaderboard claims. Hard voting cannot calculate log loss or other probability-required metrics. Ensembles are not guaranteed to beat their members. CLI: `automl ensemble`; Python API: `run_ensemble`, `load_ensemble`, `save_ensemble`.
+Limits: validation scores are optimistic after candidate/ensemble selection and are not leaderboard claims. Hard voting cannot calculate log loss or other probability-required metrics. Ensembles are not guaranteed to beat their members. `ensemble-saved` supports compatible local model directories and MLflow `runs:/` references; MLflow references need the tracking URI configured. Python API: `run_ensemble`, `run_saved_ensemble`, `load_fitted_model`, `load_ensemble`, `save_ensemble`.
 
 ## Refit and Prediction
 
@@ -618,6 +628,7 @@ Files in the output directory (existing files are refused unless `overwrite=True
 - `predictions.csv`: ID columns, `prediction`, then `proba_<class>` columns; row i matches test row i.
 - `refit.json` (`schema_version` 1): `task`, `selection` (source, label, estimator, parameters, preprocessing, seed, device, trial number, validation mean/std), `config`, `data` (target, id columns, row counts, numeric/categorical/excluded columns, classes), `prediction` (kind, columns, notes), `device`, `fit_seconds`, `versions`, `files`. Loads without Optuna, MLflow, or boosting libraries.
 - `pipeline.joblib`: the fitted pipeline when `save_model` is true. It is a pickle: load it only from a directory you trust, with matching library versions.
+- `fitted-model/`: versioned shared metadata, the fitted pipeline, and optional OOF predictions for reuse. `refit.json` contains the relative `model_reference`; MLflow-enabled runs also log the model artifact by stable reference.
 
 With `tracking=`, the fitted pipeline (cloudpickle), selection parameters, provenance tags, validation mean/std, and `refit.json` are logged as one run (`automl.kind=refit`); raw data and predictions are not. The check for MLflow happens before fitting, and a logging failure raises `TrackingError` after the local files were written.
 

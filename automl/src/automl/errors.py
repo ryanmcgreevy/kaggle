@@ -71,6 +71,12 @@ class TrackingUnavailableError(TrackingError):
     """The optional MLflow dependency is not installed."""
 
 
+class ModelStoreError(DataContractError):
+    """A fitted model reference or persisted model artifact is invalid or incompatible."""
+
+    _header = "Fitted-model artifact problems:"
+
+
 class ReportError(DataContractError):
     """Report settings, inputs, or output location are invalid."""
 

@@ -149,6 +149,29 @@ def _ensemble(args: argparse.Namespace) -> int:
     return 0
 
 
+def _ensemble_saved(args: argparse.Namespace) -> int:
+    ctx = workflow.load_run(args.config)
+    try:
+        meta_params = json.loads(args.meta_estimator_params)
+    except json.JSONDecodeError as exc:
+        raise EnsembleError(f"--meta-estimator-params must be a JSON object: {exc}") from None
+    if not isinstance(meta_params, dict):
+        raise EnsembleError("--meta-estimator-params must be a JSON object")
+    _write_json(
+        workflow.ensemble_saved_stage(
+            ctx,
+            args.model_references,
+            args.output_dir,
+            method=args.method,
+            stack_cv=args.stack_cv,
+            n_jobs=args.n_jobs,
+            meta_estimator=args.meta_estimator,
+            meta_estimator_params=meta_params,
+        )
+    )
+    return 0
+
+
 def _refit(args: argparse.Namespace) -> int:
     ctx = workflow.load_run(args.config)
     with _native_output_to_stderr(args.verbose):
@@ -304,6 +327,28 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _add_progress(ensemble)
     ensemble.set_defaults(handler=_ensemble)
+
+    ensemble_saved = commands.add_parser(
+        "ensemble-saved",
+        help="reuse saved fitted-model references; hard voting fits no models and stacking fits only its meta-model",
+    )
+    _add_config(ensemble_saved)
+    ensemble_saved.add_argument(
+        "model_references",
+        nargs="+",
+        help="at least two trusted fitted-model directories or MLflow model URIs",
+    )
+    ensemble_saved.add_argument("--output-dir", required=True, help="new directory for ensemble.json and ensemble.joblib")
+    ensemble_saved.add_argument("--method", choices=("voting", "stacking"), default="stacking")
+    ensemble_saved.add_argument("--stack-cv", type=int, default=5, help="recorded compatibility setting")
+    ensemble_saved.add_argument("--n-jobs", type=int, help="parallel jobs setting recorded in the ensemble config")
+    ensemble_saved.add_argument("--meta-estimator", help="stacking meta-estimator (see automl ensemble --help)")
+    ensemble_saved.add_argument(
+        "--meta-estimator-params",
+        default="{}",
+        help="JSON object of parameters for the selected meta-estimator (default: {})",
+    )
+    ensemble_saved.set_defaults(handler=_ensemble_saved)
 
     refit = commands.add_parser("refit", help="refit the selected pipeline on all train rows and predict test rows")
     _add_config(refit)

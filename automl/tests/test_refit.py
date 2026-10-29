@@ -9,6 +9,7 @@ import pytest
 
 from automl import (
     BaselineConfig,
+    EnsembleConfig,
     RefitConfig,
     RefitError,
     TrackingConfig,
@@ -23,6 +24,7 @@ from automl import (
     refit,
     refit_and_predict,
     run_baseline,
+    run_ensemble,
     save_baseline,
     save_refit,
     select_pipeline,
@@ -30,6 +32,7 @@ from automl import (
     tune_families,
 )
 from automl.metrics import Task, get_metric
+from automl.model_store import legacy_data_fingerprint
 from automl.refit import MODEL_FILE, PREDICTIONS_FILE, METADATA_FILE
 from automl.task import ResolvedTask
 
@@ -358,7 +361,7 @@ def test_save_load_round_trip(tmp_path):
     assert digest(d) == before
     pd.testing.assert_frame_equal(train, train_before)
     pd.testing.assert_frame_equal(test, test_before)
-    assert sorted(p.name for p in out.iterdir()) == sorted([METADATA_FILE, PREDICTIONS_FILE, MODEL_FILE])
+    assert sorted(p.name for p in out.iterdir()) == sorted([METADATA_FILE, PREDICTIONS_FILE, MODEL_FILE, "fitted-model"])
     loaded = load_refit(out, load_model=True)
     pd.testing.assert_frame_equal(loaded.predictions, res.predictions.frame, check_dtype=False)
     meta = loaded.metadata
@@ -411,6 +414,33 @@ def test_failed_save_leaves_no_partial_files(tmp_path, monkeypatch):
     assert list(out.iterdir()) == []
 
 
+def test_failed_model_store_overwrite_preserves_existing_refit(tmp_path, monkeypatch):
+    train, test, resolved, _, source = baseline_dir(tmp_path)
+    output = tmp_path / "refit"
+    result = refit_and_predict(
+        source, train, test, target="y", id_columns=("id",), resolved_task=resolved, directory=output
+    )
+    before = {
+        path.relative_to(output): path.read_bytes()
+        for path in output.rglob("*")
+        if path.is_file()
+    }
+
+    def fail_model_store(*args, **kwargs):
+        raise OSError("model store unavailable")
+
+    monkeypatch.setattr(sys.modules["automl.refit"], "save_fitted_model", fail_model_store)
+    with pytest.raises(OSError, match="model store unavailable"):
+        save_refit(result.refit, result.predictions, output, overwrite=True)
+
+    after = {
+        path.relative_to(output): path.read_bytes()
+        for path in output.rglob("*")
+        if path.is_file()
+    }
+    assert after == before
+
+
 def test_load_errors(tmp_path):
     with pytest.raises(RefitError, match="not found"):
         load_refit(tmp_path)
@@ -460,6 +490,44 @@ def test_select_from_tuning_and_families(tmp_path):
     assert out.predictions.n_rows == len(test) and out.directory is None and fres.best_family == HGB
     both = select_pipeline([tmp_path / "t", tmp_path / "f"], rank=2)
     assert both.source_kind in ("tuning", "family")
+
+
+def test_legacy_ensemble_fingerprint_remains_refittable(tmp_path):
+    train, test, resolved = make()
+    splits = make_splits(train["y"], resolved, ValidationConfig(n_folds=3))
+    sources = []
+    for index, max_iter in enumerate((5, 9)):
+        result = run_baseline(
+            train,
+            "y",
+            ("id",),
+            resolved,
+            splits,
+            BaselineConfig(estimator_params={"max_iter": max_iter}),
+        )
+        source = tmp_path / f"baseline-{index}"
+        save_baseline(result, source)
+        sources.append(source)
+    output = tmp_path / "ensemble"
+    run_ensemble(
+        train,
+        "y",
+        ("id",),
+        resolved,
+        splits,
+        sources,
+        config=EnsembleConfig(method="voting"),
+        directory=output,
+    )
+    metadata_path = output / "ensemble.json"
+    metadata = json.loads(metadata_path.read_text())
+    metadata["data_sha256"] = legacy_data_fingerprint(train)
+    metadata_path.write_text(json.dumps(metadata))
+
+    result = refit_and_predict(
+        output, train, test, target="y", id_columns=("id",), resolved_task=resolved
+    )
+    assert result.predictions.n_rows == len(test)
 
 
 # ---- MLflow ----

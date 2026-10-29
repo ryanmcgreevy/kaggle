@@ -22,6 +22,7 @@ from automl.errors import TrackingError, TrackingUnavailableError
 from automl.families import FAMILIES_FILE, FamiliesResult, load_tuning_families
 from automl.families import _write as _write_families
 from automl.metrics import Task
+from automl.model_store import FittedModelReference, MODEL_METADATA_FILE, MODEL_OOF_FILE
 from automl.preprocessing import PreprocessingConfig
 from automl.refit import build_pipeline
 from automl.tuning import RESULT_FILE as TUNING_FILE
@@ -273,6 +274,19 @@ def _log_pipeline(mlflow: Any, pipeline: Pipeline, X: pd.DataFrame, notes: list[
         return None
 
 
+def _log_model_store_artifacts(mlflow: Any, directory: str | Path | None) -> None:
+    if directory is None:
+        return
+    model_dir = Path(directory) / "fitted-model"
+    metadata_path = model_dir / MODEL_METADATA_FILE
+    if not metadata_path.is_file():
+        return
+    mlflow.log_artifact(str(metadata_path), artifact_path="automl-model")
+    oof_path = model_dir / MODEL_OOF_FILE
+    if oof_path.is_file():
+        mlflow.log_artifact(str(oof_path), artifact_path="automl-model")
+
+
 def _skip_model(cfg: TrackingConfig, data: ModelData | None, notes: list[str]) -> bool:
     """True when the model should be fitted and logged; records why not otherwise."""
     if not cfg.log_model:
@@ -431,6 +445,8 @@ def track_baseline(
                         result.preprocessing_config, [*result.plan.numeric, *result.plan.categorical],
                     )
                     model_uri = _log_pipeline(mlflow, pipeline, X, notes)
+                    if model_uri:
+                        _log_model_store_artifacts(mlflow, source or directory)
                 except TrackingError:
                     raise
                 except Exception as exc:
@@ -467,6 +483,8 @@ def _track_tuning(
         child_ids: list[str] = []
         counts = _log_study(mlflow, result, cfg, since, child_ids)
         model_uri = _log_study_model(mlflow, result, cfg, data, preprocessing_config, notes) if with_model else None
+        if model_uri:
+            _log_model_store_artifacts(mlflow, result.directory)
         _log_tuning_artifact(mlflow, result)
         mlflow.set_tags(_tags(cfg, "tuning", result.versions, notes, {**counts, **extra}))
         return TrackingResult(s.shown, cfg.experiment_name, s.experiment_id, run.info.run_id, tuple(child_ids), model_uri, tuple(notes))
@@ -533,6 +551,8 @@ def track_families(
                 mlflow.set_tag("automl.best_family", best.family)
                 mlflow.log_metric("best_score", best.result.best.score)
                 model_uri = _log_study_model(mlflow, best.result, cfg, data, preprocessing_config, notes)
+                if model_uri:
+                    _log_model_store_artifacts(mlflow, best.result.directory)
             if result.directory is not None and (result.directory / FAMILIES_FILE).is_file():
                 mlflow.log_artifact(str(result.directory / FAMILIES_FILE))
             else:
@@ -574,6 +594,76 @@ def track_submission(
             return TrackingResult(s.shown, cfg.experiment_name, s.experiment_id, run.info.run_id, (), None, tuple(notes))
 
 
+def track_fitted_model(
+    pipeline: Any,
+    metadata: dict[str, Any],
+    tracking: TrackingConfig,
+    *,
+    oof_predictions: pd.DataFrame | None = None,
+    directory: str | Path | None = None,
+) -> FittedModelReference:
+    """Log a fitted model and its non-raw provenance, returning a stable MLflow run URI."""
+    _require_mlflow()
+    if not tracking.log_model:
+        raise TrackingError("tracking.log_model must be true to save a fitted-model reference to MLflow")
+    if metadata.get("schema_version") != 1 or not metadata.get("model_id"):
+        raise TrackingError("fitted-model metadata must use schema_version 1 and include model_id")
+    def credential_fields(value: Any, prefix: str = "") -> list[str]:
+        found = []
+        if isinstance(value, dict):
+            for key, child in value.items():
+                path = f"{prefix}.{key}" if prefix else str(key)
+                if _CREDENTIAL_KEY.search(str(key)):
+                    found.append(path)
+                found.extend(credential_fields(child, path))
+        elif isinstance(value, (list, tuple)):
+            for index, child in enumerate(value):
+                found.extend(credential_fields(child, f"{prefix}[{index}]"))
+        return found
+
+    secret_fields = credential_fields(metadata)
+    if secret_fields:
+        raise TrackingError(f"fitted-model metadata has credential-like fields {secret_fields}; secrets must not be logged")
+    if oof_predictions is not None:
+        invalid_columns = [
+            column
+            for column in oof_predictions.columns
+            if column not in {"row", "fold", "prediction"} and re.fullmatch(r"proba_[0-9]+", str(column)) is None
+        ]
+        if invalid_columns:
+            raise TrackingError(f"OOF predictions contain unsupported columns {invalid_columns}")
+    notes = ["Trusted serialized model; load only from an MLflow store you trust."]
+    with _Session(tracking, directory) as session:
+        mlflow = session.mlflow
+        with mlflow.start_run(run_name=tracking.run_name or f"fitted-model-{metadata['model_id'][:12]}") as run:
+            try:
+                import mlflow.sklearn
+
+                try:
+                    mlflow.sklearn.log_model(pipeline, name="model", serialization_format="cloudpickle")
+                except TypeError:
+                    mlflow.sklearn.log_model(pipeline, artifact_path="model", serialization_format="cloudpickle")
+                uri = f"runs:/{run.info.run_id}/model"
+                mlflow.log_dict(metadata, f"automl-model/{MODEL_METADATA_FILE}")
+                if oof_predictions is not None:
+                    with tempfile.TemporaryDirectory() as tmp:
+                        path = Path(tmp) / MODEL_OOF_FILE
+                        oof_predictions.to_csv(path, index=False)
+                        mlflow.log_artifact(str(path), artifact_path="automl-model")
+                mlflow.set_tags(
+                    _tags(
+                        tracking,
+                        "fitted_model",
+                        metadata.get("dependency_versions", {}),
+                        notes,
+                        {"automl.model_id": str(metadata["model_id"]), "automl.model_uri": uri},
+                    )
+                )
+            except Exception as exc:
+                raise session.wrap(exc) from None
+    return FittedModelReference(uri)
+
+
 def track_refit(
     pipeline: Pipeline,
     X: pd.DataFrame,
@@ -601,6 +691,8 @@ def track_refit(
                     mlflow.log_metric(name, sel[key])
             mlflow.log_metric("fit_seconds", metadata["fit_seconds"])
             model_uri = _log_pipeline(mlflow, pipeline, X, notes) if cfg.log_model else None
+            if model_uri:
+                _log_model_store_artifacts(mlflow, directory)
             if not cfg.log_model:
                 notes.append("model not logged: 'log_model' is false")
             with tempfile.TemporaryDirectory() as tmp:

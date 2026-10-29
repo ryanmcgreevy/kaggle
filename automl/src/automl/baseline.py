@@ -5,8 +5,9 @@ from __future__ import annotations
 import json
 import math
 import platform
+import shutil
 import time
-from dataclasses import dataclass, field, fields
+from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 from typing import Any
 
@@ -30,6 +31,7 @@ from automl.estimators import (
     resolve_device,
 )
 from automl.metrics import Task
+from automl.model_store import data_fingerprint, save_fitted_model, split_provenance
 from automl.preprocessing import (
     ColumnPlan,
     PreprocessingConfig,
@@ -122,6 +124,11 @@ class BaselineResult:
     estimator_key: str = DEFAULT_ESTIMATOR
     categorical_handling: str = "encoded"
     device: dict[str, Any] = field(default_factory=dict)
+    full_model: Any = field(default=None, repr=False, compare=False)
+    model_oof_predictions: pd.DataFrame | None = field(default=None, repr=False, compare=False)
+    training_data_sha256: str | None = None
+    validation_splits: dict[str, Any] | None = None
+    model_reference: str | None = None
 
 
 def make_estimator(
@@ -303,6 +310,34 @@ def run_baseline(
     scores = np.array([f.score for f in folds])
     sc = splits.config
     est_name, est_params = describe_estimator(estimator)
+    model_oof = []
+    for (fold_model, _, classes, _), split in zip(results, splits.splits):
+        valid_x = X.iloc[split.valid_idx]
+        frame = pd.DataFrame({"row": split.valid_idx, "fold": split.fold})
+        frame["prediction"] = np.asarray(fold_model.predict(valid_x))
+        if task is not Task.REGRESSION and hasattr(fold_model, "predict_proba"):
+            probabilities = np.asarray(fold_model.predict_proba(valid_x))
+            if probabilities.shape != (len(split.valid_idx), len(classes)):
+                raise BaselineError(f"fold {split.fold}: model returned invalid probability shape {probabilities.shape}")
+            for idx, class_label in enumerate(classes):
+                frame[f"proba_{idx}"] = probabilities[:, idx]
+        model_oof.append(frame)
+    full_model = None
+    if cfg.save_models:
+        full_model = clone(pipeline)
+        if progress is not None:
+            emit_progress(progress, "baseline", "full_fit.start", progress_started, model=spec.name)
+        started = time.perf_counter()
+        full_model.fit(X, y, **fit_params)
+        if progress is not None:
+            emit_progress(
+                progress,
+                "baseline",
+                "full_fit.complete",
+                progress_started,
+                model=spec.name,
+                fit_seconds=time.perf_counter() - started,
+            )
     result = BaselineResult(
         task=task,
         metric=metric.name,
@@ -336,6 +371,10 @@ def run_baseline(
             "reason": choice.reason,
             "note": "GPU training is not guaranteed to be bit-reproducible" if choice.effective == "gpu" else None,
         },
+        full_model=full_model,
+        model_oof_predictions=pd.concat(model_oof, ignore_index=True).sort_values("row", kind="stable").reset_index(drop=True),
+        training_data_sha256=data_fingerprint(train),
+        validation_splits=split_provenance(splits),
     )
     if tracking is not None and tracking.enabled:
         from automl.tracking import ModelData, track_baseline
@@ -364,6 +403,41 @@ def save_baseline(result: BaselineResult, directory: str | Path) -> None:
     with_models = result.config.save_models
     if with_models and not result.models:
         raise BaselineError("save_models is true but the result holds no fitted models")
+    model_reference = None
+    if with_models:
+        if result.full_model is None:
+            raise BaselineError("save_models is true but the result has no full-data fitted model")
+        try:
+            save_fitted_model(
+                result.full_model,
+                directory / "fitted-model",
+                task=result.task.value,
+                metric=result.metric,
+                direction=result.direction,
+                feature_columns=[*result.plan.numeric, *result.plan.categorical],
+                class_order=(
+                    list(result.full_model.named_steps["model"].classes_)
+                    if result.task is not Task.REGRESSION
+                    else []
+                ),
+                effective_config={
+                    "estimator": result.estimator_key,
+                    "estimator_params": result.estimator_params,
+                    "preprocessing": asdict(result.preprocessing_config),
+                    "seed": result.config.seed,
+                    "n_jobs": result.config.n_jobs,
+                    "device": result.device.get("effective"),
+                },
+                dependency_versions=result.versions,
+                training_data_sha256=result.training_data_sha256 or "",
+                n_training_rows=result.n_rows,
+                splits=result.validation_splits,
+                oof_predictions=result.model_oof_predictions,
+            )
+            model_reference = "fitted-model"
+        except Exception:
+            shutil.rmtree(directory, ignore_errors=True)
+            raise
     payload = {
         "schema_version": ARTIFACT_VERSION,
         "task": result.task.value,
@@ -397,7 +471,14 @@ def save_baseline(result: BaselineResult, directory: str | Path) -> None:
         ],
         "summary": {"mean": result.mean, "std": result.std},
         "versions": result.versions,
-        "files": {"oof_predictions": OOF_FILE, "models": MODELS_FILE if with_models else None},
+        "training_data_sha256": result.training_data_sha256,
+        "files": {
+            "oof_predictions": OOF_FILE,
+            "models": MODELS_FILE if with_models else None,
+            "fitted_model": "fitted-model" if model_reference is not None else None,
+        },
+        "model_reference": model_reference,
+        "validation_splits": result.validation_splits,
     }
     (directory / RESULT_FILE).write_text(json.dumps(payload, indent=2))
     result.oof.to_csv(directory / OOF_FILE, index=False)
@@ -483,4 +564,7 @@ def load_baseline(directory: str | Path, load_models: bool = False) -> BaselineR
         estimator_key=estimator_key,
         categorical_handling=handling,
         device=device,
+        training_data_sha256=raw.get("training_data_sha256"),
+        validation_splits=raw.get("validation_splits"),
+        model_reference=raw.get("model_reference"),
     )

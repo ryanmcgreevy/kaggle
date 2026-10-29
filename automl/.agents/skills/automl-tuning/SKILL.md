@@ -25,11 +25,11 @@ Run TOML, train CSV, optional `splits.json`, a budget; optional `[tuning]` table
 
 ## Outputs
 
-A new directory with `tuning_families.json` and one Optuna study per family, or `tuning.json` and `study.db` with `--estimator`.
+A new directory with `tuning_families.json` and one Optuna study per family, or `tuning.json` and `study.db` with `--estimator`; each saved result also includes the best model's `fitted-model/` artifact.
 
 ## Assumptions and limits
 
-Optuna sampler is seeded; runs bounded by time do not repeat, and a running trial is not interrupted. Failed and pruned trials are recorded and never best; if none complete, the error lists the reasons. Scores are optimistically biased by the search and are not leaderboard claims. The output directory must be new unless `--resume`. Needs `pip install -e '.[tuning]'`, plus `'.[boosting]'` for those families.
+Optuna sampler is seeded; runs bounded by time do not repeat, and a running trial is not interrupted. Saving each selected model's OOF predictions and full-data pipeline adds fold refits and a full-data fit after the search. Failed and pruned trials are recorded and never best; if none complete, the error lists the reasons. Scores are optimistically biased by the search and are not leaderboard claims. The output directory must be new unless `--resume`. Needs `pip install -e '.[tuning]'`, plus `'.[boosting]'` for those families.
 
 ## Check
 

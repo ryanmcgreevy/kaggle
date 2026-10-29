@@ -92,7 +92,8 @@ def test_progress_is_opt_in_for_python_api(capsys, monkeypatch):
     assert [event.event for event in events].count("fold.complete") == len(splits.splits)
     assert events[0].event == "stage.start" and events[-1].event == "stage.complete"
     assert all(event.elapsed_seconds >= 0 for event in events)
-    assert len(fitted) == len(splits.splits)
+    assert len(fitted) == len(splits.splits) + 1
+    assert any(event.event == "full_fit.complete" for event in events)
 
 
 def test_progress_does_not_change_parallel_baseline_scores():
@@ -264,7 +265,12 @@ def test_artifact_round_trip_and_stage_boundary(tmp_path):
     save_splits(splits, tmp_path / "splits.json")
     out = tmp_path / "run"
     save_baseline(res, out)
-    assert sorted(p.name for p in out.iterdir()) == ["baseline.json", "models.joblib", "oof_predictions.csv"]
+    assert sorted(p.name for p in out.iterdir()) == [
+        "baseline.json",
+        "fitted-model",
+        "models.joblib",
+        "oof_predictions.csv",
+    ]
     with pytest.raises(BaselineError, match="already exists"):
         save_baseline(res, out)
 

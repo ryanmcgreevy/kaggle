@@ -32,6 +32,7 @@ from automl.errors import DataContractError, EnsembleError, ReportError, TaskMet
 from automl.estimators import enable_native_verbosity
 from automl.metrics import Task, get_metric
 from automl.model_report import Candidate, CandidateSet, collect_candidates
+from automl.model_store import FittedModelReference, data_fingerprint as fitted_data_fingerprint, load_fitted_model
 from automl.preprocessing import PreprocessingConfig, infer_columns
 from automl.progress import ProgressCallback, emit_progress
 from automl.refit import build_pipeline
@@ -124,8 +125,8 @@ class EnsembleResult:
     candidate_details: dict[str, dict[str, Any]]
     candidate_fold_scores: dict[str, tuple[float, ...]]
     folds: tuple[EnsembleFold, ...]
-    mean: float
-    std: float
+    mean: float | None
+    std: float | None
     n_rows: int
     data_sha256: str
     splits: dict[str, Any]
@@ -136,6 +137,8 @@ class EnsembleResult:
     classes: tuple[Any, ...]
     model: Any = field(default=None, repr=False, compare=False)
     directory: Path | None = None
+    validation_status: str = "validated"
+    validation_limitation: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -164,9 +167,13 @@ class EnsembleResult:
             "feature_roles": self.feature_roles,
             "classes": _plain(list(self.classes)),
             "files": {"model": MODEL_FILE if self.config.save_model else None},
+            "validation_status": self.validation_status,
+            "validation_limitation": self.validation_limitation,
             "score_statement": (
                 "Scores are validation scores on the training data, optimistic after selection, "
                 "and are not leaderboard predictions."
+                if self.validation_status == "validated"
+                else "No ensemble validation score is reported because the saved artifacts cannot prove a leakage-safe score."
             ),
         }
 
@@ -191,10 +198,7 @@ def _json_default(value: Any) -> Any:
 
 def data_fingerprint(frame: pd.DataFrame) -> str:
     """Hash ordered column names, dtypes, and row values without persisting raw data."""
-    digest = hashlib.sha256()
-    digest.update(json.dumps([(str(name), str(dtype)) for name, dtype in zip(frame.columns, frame.dtypes)]).encode())
-    digest.update(pd.util.hash_pandas_object(frame, index=False, categorize=True).to_numpy().tobytes())
-    return digest.hexdigest()
+    return fitted_data_fingerprint(frame)
 
 
 def _candidate_set(sources: Any, labels: tuple[str, ...] | None) -> CandidateSet:
@@ -406,6 +410,302 @@ def _score(y_true, model, X, task: Task, metric_name: str, method: str) -> float
         if metric_name == "roc_auc" and task is Task.BINARY:
             predictions = predictions[:, 1]
     return float(metric(y_true, predictions))
+
+
+class _SavedMemberEnsemble:
+    def __init__(self, models: tuple[Any, ...], classes: tuple[Any, ...], method: str, task: Task, meta: Any = None):
+        self.models = models
+        self.classes_ = np.asarray(classes)
+        self.method = method
+        self.task = task
+        self.meta = meta
+
+    def _member_features(self, X: pd.DataFrame) -> np.ndarray:
+        features = []
+        for model in self.models:
+            if self.task is Task.REGRESSION:
+                features.append(np.asarray(model.predict(X), dtype=float).reshape(-1, 1))
+                continue
+            estimator = model.named_steps.get("model") if hasattr(model, "named_steps") else model
+            model_classes = list(getattr(estimator, "classes_", ()))
+            if hasattr(model, "predict_proba"):
+                probabilities = np.asarray(model.predict_proba(X))
+                if probabilities.ndim != 2 or probabilities.shape[1] != len(model_classes):
+                    raise EnsembleError("saved member returned probabilities with an incompatible class shape")
+                if set(model_classes) != set(self.classes_.tolist()):
+                    raise EnsembleError("saved member classes do not match the ensemble class order")
+                order = [model_classes.index(label) for label in self.classes_.tolist()]
+                features.append(probabilities[:, order])
+            else:
+                labels = np.asarray(model.predict(X))
+                features.append(np.column_stack([labels == label for label in self.classes_]).astype(float))
+        return np.concatenate(features, axis=1)
+
+    def predict(self, X: pd.DataFrame) -> np.ndarray:
+        if self.method == "stacking":
+            return np.asarray(self.meta.predict(self._member_features(X)))
+        votes = np.column_stack([model.predict(X) for model in self.models])
+        return _majority_vote(votes, self.classes_)
+
+
+class _SavedStackingClassifier(_SavedMemberEnsemble):
+    def predict_proba(self, X: pd.DataFrame) -> np.ndarray:
+        if not hasattr(self.meta, "predict_proba"):
+            raise EnsembleError("the saved stacking meta-estimator does not support predict_proba")
+        probabilities = np.asarray(self.meta.predict_proba(self._member_features(X)))
+        meta_classes = list(self.meta.classes_)
+        if set(meta_classes) != set(self.classes_.tolist()):
+            raise EnsembleError("saved stacking meta-estimator class order differs from the base members")
+        return probabilities[:, [meta_classes.index(label) for label in self.classes_.tolist()]]
+
+
+def _oof_class_features(frame: pd.DataFrame, classes: tuple[Any, ...]) -> np.ndarray:
+    probability_columns = [f"proba_{idx}" for idx in range(len(classes))]
+    if set(probability_columns) <= set(frame.columns):
+        return frame[probability_columns].to_numpy(dtype=float)
+    labels = frame["prediction"].to_numpy()
+    return np.column_stack([labels == label for label in classes]).astype(float)
+
+
+def _majority_vote(votes: np.ndarray, classes: Any) -> np.ndarray:
+    ordered = list(classes)
+    return np.asarray(
+        [
+            max(ordered, key=lambda label: (int(np.count_nonzero(row == label)), -ordered.index(label)))
+            for row in votes
+        ]
+    )
+
+
+def _oof_metric_values(frame: pd.DataFrame, task: Task, metric_name: str) -> np.ndarray:
+    metric = get_metric(metric_name)
+    if task is Task.REGRESSION or metric.needs in ("values", "labels"):
+        return frame["prediction"].to_numpy()
+    probability_columns = [column for column in frame.columns if column.startswith("proba_")]
+    if not probability_columns:
+        raise EnsembleError(f"saved OOF predictions do not contain probabilities required by '{metric_name}'")
+    probabilities = frame[[f"proba_{idx}" for idx in range(len(probability_columns))]].to_numpy(dtype=float)
+    return probabilities[:, 1] if metric_name == "roc_auc" and task is Task.BINARY else probabilities
+
+
+def run_saved_ensemble(
+    train: pd.DataFrame,
+    target: str,
+    model_references: tuple[FittedModelReference | str | Path, ...] | list[FittedModelReference | str | Path],
+    resolved_task: Any,
+    config: EnsembleConfig | None = None,
+    *,
+    meta_estimator: Any = None,
+    directory: str | Path | None = None,
+    progress: ProgressCallback | None = None,
+    tracking_uri: str | None = None,
+) -> EnsembleResult:
+    """Build an ensemble from saved full-data pipelines and fold-excluded OOF predictions.
+
+    Saved members are loaded, never fitted. Stacking fits only its meta-estimator. A validation
+    score is withheld for stacking because the available OOF artifacts cannot prove that the
+    meta-estimator did not train on the rows being scored.
+    """
+    cfg = config or EnsembleConfig()
+    task_value = getattr(resolved_task, "task", resolved_task)
+    task = Task(getattr(task_value, "value", task_value))
+    metric_name = getattr(getattr(resolved_task, "metric", None), "name", None)
+    if not isinstance(metric_name, str):
+        raise EnsembleError("resolved_task must include a metric name")
+    if target not in train.columns or train[target].isna().any():
+        raise EnsembleError(f"training target column {target!r} is missing or contains null values")
+    refs = tuple(model_references)
+    if len(refs) < 2:
+        raise EnsembleError("an ensemble needs at least two fitted-model references")
+    loaded_models = []
+    for ref in refs:
+        try:
+            loaded_models.append(load_fitted_model(ref, tracking_uri=tracking_uri))
+        except DataContractError as exc:
+            raise EnsembleError(exc.problems) from None
+    metadata = [loaded.metadata for loaded in loaded_models]
+    reference_ids = [str(item["model_id"]) for item in metadata]
+    if len(set(reference_ids)) != len(reference_ids):
+        raise EnsembleError("model references must identify unique fitted models")
+    fingerprint = data_fingerprint(train)
+    expected_metric = get_metric(metric_name)
+    first = metadata[0]
+    expected_features = first["feature_columns"]
+    expected_classes = first["class_order"]
+    expected_splits = first.get("validation_splits")
+    expected_split_hash = expected_splits.get("sha256") if isinstance(expected_splits, dict) else None
+    problems = []
+    for index, (item, loaded) in enumerate(zip(metadata, loaded_models)):
+        label = f"model {reference_ids[index]}"
+        if item.get("task") != task.value:
+            problems.append(f"{label} was saved for task {item.get('task')!r}, not {task.value!r}")
+        model_metric = item.get("metric") or {}
+        if model_metric.get("name") != metric_name or model_metric.get("direction") != expected_metric.direction:
+            problems.append(f"{label} was saved for an incompatible metric")
+        if item.get("training_data_sha256") != fingerprint or item.get("n_training_rows") != len(train):
+            problems.append(f"{label} was fitted on different training data")
+        if item.get("fit_scope") != "full_data":
+            problems.append(f"{label} does not contain a full-data pipeline for inference")
+        if item.get("feature_columns") != expected_features:
+            problems.append(f"{label} has an incompatible feature schema")
+        if item.get("class_order") != expected_classes:
+            problems.append(f"{label} has an incompatible class order")
+        if task is not Task.REGRESSION:
+            estimator = (
+                loaded.pipeline.named_steps.get("model")
+                if hasattr(loaded.pipeline, "named_steps")
+                else loaded.pipeline
+            )
+            if list(getattr(estimator, "classes_", ())) != item.get("class_order"):
+                problems.append(f"{label} pipeline classes do not match its saved class order")
+        splits = item.get("validation_splits")
+        if (
+            not expected_split_hash
+            or not isinstance(splits, dict)
+            or splits.get("sha256") != expected_split_hash
+            or splits.get("n_rows") != len(train)
+        ):
+            problems.append(f"{label} has incompatible or missing validation splits")
+        oof_info = item.get("oof") or {}
+        if not oof_info.get("available") or loaded.oof_predictions is None:
+            problems.append(f"{label} has no saved OOF predictions")
+        elif not oof_info.get("complete"):
+            problems.append(f"{label} has incomplete OOF coverage")
+    if problems:
+        raise EnsembleError(problems)
+    if not expected_features or not set(expected_features) <= set(train.columns):
+        raise EnsembleError(f"training data is missing saved feature columns {expected_features}")
+    feature_columns = tuple(expected_features)
+    if cfg.method == "voting":
+        if task is Task.REGRESSION:
+            raise EnsembleError("majority voting is classification-only; use method='stacking' for regression")
+        if expected_metric.needs == "proba" and metric_name != "roc_auc":
+            raise EnsembleError(
+                f"hard majority voting produces labels, not probabilities, and cannot be scored with "
+                f"'{metric_name}'; use method='stacking'"
+            )
+    if task is not Task.REGRESSION and not expected_classes:
+        raise EnsembleError("classification model references must declare a non-empty class order")
+
+    split_info = expected_splits
+    expected_rows = set(row for fold in split_info["folds"] for row in fold["valid_rows"])
+    row_maps = []
+    for loaded in loaded_models:
+        frame = loaded.oof_predictions.copy()
+        if set(frame["row"].astype(int)) != expected_rows:
+            raise EnsembleError("saved OOF predictions do not cover the declared validation rows")
+        row_maps.append(frame.set_index(frame["row"].astype(int), drop=False))
+    if cfg.method == "stacking" and expected_rows != set(range(len(train))):
+        raise EnsembleError(
+            "stacking requires complete k-fold OOF coverage of every training row; holdout artifacts are insufficient"
+        )
+
+    classes = tuple(expected_classes)
+    full_models = tuple(loaded.pipeline for loaded in loaded_models)
+    labels = tuple(f"saved:{model_id}" for model_id in reference_ids)
+    meta = _meta_estimator(task, cfg, meta_estimator)
+    fitted_meta = None
+    if cfg.method == "stacking":
+        feature_parts = []
+        for frame in row_maps:
+            aligned = frame.loc[sorted(expected_rows)]
+            features = (
+                aligned[["prediction"]].to_numpy(dtype=float)
+                if task is Task.REGRESSION
+                else _oof_class_features(aligned, classes)
+            )
+            feature_parts.append(features)
+        X_meta = np.concatenate(feature_parts, axis=1)
+        y_meta = train.iloc[sorted(expected_rows)][target].to_numpy()
+        fitted_meta = clone(meta)
+        try:
+            fitted_meta.fit(X_meta, y_meta)
+        except (ValueError, TypeError) as exc:
+            raise EnsembleError(f"fitting the stacking meta-estimator from saved OOF predictions failed: {exc}") from None
+        final_model = _SavedStackingClassifier(full_models, classes, cfg.method, task, fitted_meta) if task is not Task.REGRESSION else _SavedMemberEnsemble(full_models, classes, cfg.method, task, fitted_meta)
+        validation_status = "unavailable"
+        limitation = (
+            "saved OOF predictions support meta-model fitting, but do not establish an independent outer evaluation "
+            "for the meta-model; no validation score is reported"
+        )
+        folds: tuple[EnsembleFold, ...] = ()
+        mean = std = None
+        candidate_scores: dict[str, tuple[float, ...]] = {}
+    else:
+        final_model = _SavedMemberEnsemble(full_models, classes, cfg.method, task)
+        fold_rows_list = []
+        per_candidate: dict[str, list[float]] = {label: [] for label in labels}
+        metric_spec = get_metric(metric_name)
+        for fold in split_info["folds"]:
+            valid_rows = list(fold["valid_rows"])
+            y_valid = train.iloc[valid_rows][target]
+            member_frames = [frame.loc[valid_rows] for frame in row_maps]
+            vote_values = np.column_stack([frame["prediction"].to_numpy() for frame in member_frames])
+            voted = _majority_vote(vote_values, classes)
+            try:
+                score = float(metric_spec(y_valid, voted))
+                for label, frame in zip(labels, member_frames):
+                    per_candidate[label].append(float(metric_spec(y_valid, _oof_metric_values(frame, task, metric_name))))
+            except (ValueError, TypeError, TaskMetricError) as exc:
+                raise EnsembleError(f"fold {fold['fold']}: saved OOF scoring failed: {exc}") from None
+            if not math.isfinite(score):
+                raise EnsembleError(f"fold {fold['fold']}: hard-voting score is non-finite")
+            fold_rows_list.append(
+                EnsembleFold(fold["fold"], len(fold["train_rows"]), len(valid_rows), score, 0.0, 0.0)
+            )
+        folds = tuple(fold_rows_list)
+        scores = [fold.score for fold in folds]
+        mean, std = float(np.mean(scores)), float(np.std(scores))
+        candidate_scores = {key: tuple(value) for key, value in per_candidate.items()}
+        validation_status = "validated"
+        limitation = None
+    feature_roles = {
+        column: "numeric" if pd.api.types.is_numeric_dtype(train[column]) else "categorical"
+        for column in feature_columns
+    }
+    result = EnsembleResult(
+        task=task,
+        metric=metric_name,
+        direction=expected_metric.direction,
+        method=cfg.method,
+        candidates=labels,
+        candidate_details={
+            label: {
+                "model_reference": str(loaded.reference),
+                "model_id": item["model_id"],
+                "estimator": (item.get("effective_config") or {}).get("estimator"),
+                "validation_mean": None,
+                "validation_std": None,
+            }
+            for label, loaded, item in zip(labels, loaded_models, metadata)
+        },
+        candidate_fold_scores=candidate_scores,
+        folds=folds,
+        mean=mean,
+        std=std,
+        n_rows=len(train),
+        data_sha256=fingerprint,
+        splits={
+            "strategy": split_info["strategy"],
+            "seed": split_info["seed"],
+            "n_splits": len(split_info["folds"]),
+            "n_rows": len(train),
+            "stratified": split_info["stratified"],
+            "sha256": expected_split_hash,
+            "source": "saved_model_artifacts",
+        },
+        config=cfg,
+        meta_estimator=type(fitted_meta).__name__ if fitted_meta is not None else None,
+        feature_columns=feature_columns,
+        feature_roles=feature_roles,
+        classes=classes,
+        model=final_model,
+        validation_status=validation_status,
+        validation_limitation=limitation,
+    )
+    if directory is not None:
+        result = replace(result, directory=save_ensemble(result, directory))
+    return result
 
 
 def run_ensemble(
@@ -705,10 +1005,18 @@ def load_ensemble(directory: str | Path, *, load_model: bool = False) -> LoadedE
             raise ValueError("candidates must contain at least two unique non-empty labels")
         if not isinstance(raw["candidate_details"], dict) or set(raw["candidate_details"]) != set(candidates):
             raise ValueError("candidate_details must describe every selected candidate")
-        if not isinstance(raw["folds"], list) or not raw["folds"]:
-            raise ValueError("folds must be a non-empty list")
+        validation_status = raw.get("validation_status", "validated")
+        if validation_status not in {"validated", "unavailable"}:
+            raise ValueError("validation_status must be 'validated' or 'unavailable'")
+        if not isinstance(raw["folds"], list) or (validation_status == "validated" and not raw["folds"]):
+            raise ValueError("folds must be a list and non-empty when validation is available")
         summary = raw["summary"]
-        if not isinstance(summary, dict) or any(
+        if not isinstance(summary, dict):
+            raise ValueError("summary must be an object")
+        if validation_status == "unavailable":
+            if summary.get("mean") is not None or summary.get("std") is not None:
+                raise ValueError("summary scores must be null when validation_status is unavailable")
+        elif any(
             isinstance(summary.get(key), bool)
             or not isinstance(summary.get(key), (int, float))
             or not math.isfinite(summary[key])
@@ -743,5 +1051,10 @@ def load_ensemble(directory: str | Path, *, load_model: bool = False) -> LoadedE
         model_name = raw["files"].get("model")
         if model_name != MODEL_FILE or not (out / MODEL_FILE).is_file():
             raise EnsembleError(f"{path}: fitted ensemble model was requested but is missing")
-        model = joblib.load(out / MODEL_FILE)
+        try:
+            model = joblib.load(out / MODEL_FILE)
+        except Exception as exc:
+            raise EnsembleError(
+                f"could not load trusted fitted ensemble {out / MODEL_FILE}: {type(exc).__name__}: {exc}"
+            ) from None
     return LoadedEnsemble(raw, model)
