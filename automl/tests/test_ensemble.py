@@ -135,6 +135,78 @@ def test_regression_stacking_and_configured_meta_estimator(tmp_path):
     assert np.isfinite(result.mean)
 
 
+@pytest.mark.parametrize(
+    ("task", "method"),
+    [
+        (Task.BINARY, "voting"),
+        (Task.BINARY, "stacking"),
+        (Task.REGRESSION, "stacking"),
+    ],
+)
+def test_fit_mode_skips_outer_validation_and_persists_prediction_model(tmp_path, monkeypatch, task, method):
+    import automl.ensemble as ensemble_module
+
+    train, test, resolved, _, sources = saved_candidates(tmp_path, task)
+
+    def unexpected_score(*args, **kwargs):
+        raise AssertionError("fit mode must not compute outer validation scores")
+
+    monkeypatch.setattr(ensemble_module, "_score", unexpected_score)
+    output = tmp_path / f"{task.value}-{method}-fit"
+    result = run_ensemble(
+        train,
+        "target",
+        ("id",),
+        resolved,
+        sources=sources,
+        config=EnsembleConfig(method=method, seed=11, stack_cv=3, mode="fit"),
+        directory=output,
+    )
+
+    assert result.mean is None and result.std is None
+    assert result.folds == ()
+    assert result.candidate_fold_scores == {}
+    assert result.validation_status == "not_evaluated"
+    assert result.validation_limitation
+    assert result.to_dict()["score_statement"] == "No validation was run in fit mode."
+    assert result.splits is None
+    assert all(
+        "validation_mean" not in candidate and "source_validation_mean" in candidate
+        for candidate in result.candidate_details.values()
+    )
+    loaded = load_ensemble(output, load_model=True)
+    assert loaded.metadata["config"]["mode"] == "fit"
+    assert loaded.metadata["validation_status"] == "not_evaluated"
+    assert loaded.model is not None
+
+    refitted = refit_and_predict(
+        output,
+        train,
+        test,
+        target="target",
+        id_columns=("id",),
+        resolved_task=resolved,
+    )
+    assert refitted.predictions.n_rows == len(test)
+    assert list(refitted.predictions.frame["id"]) == list(test["id"])
+
+
+def test_evaluate_mode_requires_splits_and_fit_mode_rejects_them(tmp_path):
+    train, _, resolved, splits, sources = saved_candidates(tmp_path)
+    with pytest.raises(EnsembleError, match="requires validation splits"):
+        run_ensemble(train, "target", ("id",), resolved, sources=sources)
+    with pytest.raises(EnsembleError, match="does not accept outer validation splits"):
+        run_ensemble(
+            train,
+            "target",
+            ("id",),
+            resolved,
+            splits,
+            sources,
+            EnsembleConfig(mode="fit"),
+        )
+
+
 @pytest.mark.parametrize("source_kind", ["tuning", "families"])
 def test_ensembles_consume_saved_tuning_candidates(tmp_path, source_kind):
     pytest.importorskip("optuna")

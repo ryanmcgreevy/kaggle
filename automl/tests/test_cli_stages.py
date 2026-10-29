@@ -221,6 +221,7 @@ def test_ensemble_command_and_refit_use_saved_ensemble(
     assert code == 0, err
     assert "[ensemble] starting" in err
     assert payload["method"] == "stacking"
+    assert payload["mode"] == "evaluate"
     assert len(payload["candidates"]) == 2
     assert (output / "ensemble.json").is_file() and (output / "ensemble.joblib").is_file()
     assert json.loads((output / "ensemble.json").read_text())["config"]["n_jobs"] == expected_jobs
@@ -264,11 +265,87 @@ def test_ensemble_command_and_refit_use_saved_ensemble(
     assert refit_payload["n_test_rows"] == 30
 
 
+def test_ensemble_fit_mode_skips_outer_validation_and_refits(project, capsys):
+    baseline_a, baseline_b = project / "baseline-a", project / "baseline-b"
+    assert cli(["baseline", _config(project), "--output-dir", baseline_a], capsys)[0] == 0
+    assert cli(["baseline", _config(project), "--output-dir", baseline_b], capsys)[0] == 0
+
+    output = project / "ensemble-fit"
+    code, payload, err = cli(
+        [
+            "ensemble",
+            _config(project),
+            str(baseline_a),
+            str(baseline_b),
+            "--method",
+            "stacking",
+            "--mode",
+            "fit",
+            "--stack-cv",
+            "3",
+            "--output-dir",
+            str(output),
+        ],
+        capsys,
+    )
+    assert code == 0, err
+    assert "[ensemble] starting" in err and "mode=fit" in err
+    assert payload["mode"] == "fit"
+    assert payload["mean"] is None and payload["std"] is None
+    assert payload["n_folds"] == 0
+    assert payload["candidate_scores"] == {}
+    assert payload["splits"] is None
+    assert payload["validation_status"] == "not_evaluated"
+    metadata = json.loads((output / "ensemble.json").read_text())
+    assert metadata["config"]["mode"] == "fit"
+    assert metadata["folds"] == []
+
+    api_payload = ensemble_stage(
+        load_run(_config(project)),
+        [baseline_a, baseline_b],
+        project / "ensemble-fit-api",
+        method="stacking",
+        mode="fit",
+        stack_cv=3,
+    )
+    assert api_payload["mode"] == "fit"
+    assert api_payload["mean"] is None
+    assert api_payload["candidate_scores"] == {}
+    assert api_payload["splits"] is None
+
+    refit_code, refit_payload, refit_err = cli(
+        ["refit", _config(project), str(output), "--output-dir", str(project / "ensemble-fit-refit"), "--quiet"],
+        capsys,
+    )
+    assert refit_code == 0, refit_err
+    assert refit_payload["n_test_rows"] == 30
+
+    bad_code, bad_payload, bad_err = cli(
+        [
+            "ensemble",
+            _config(project),
+            str(baseline_a),
+            str(baseline_b),
+            "--mode",
+            "fit",
+            "--splits",
+            str(project / "missing-splits.json"),
+            "--output-dir",
+            str(project / "ensemble-fit-bad"),
+            "--quiet",
+        ],
+        capsys,
+    )
+    assert bad_code == 1 and bad_payload is None
+    assert "--splits applies only to evaluation mode" in bad_err
+
+
 def test_ensemble_parser_accepts_all_available_cores():
     args = build_parser().parse_args(
         ["ensemble", "run.toml", "source-a", "source-b", "--output-dir", "ensemble", "--n-jobs", "-1"]
     )
     assert args.n_jobs == -1
+    assert args.mode == "evaluate"
 
 
 def test_ensemble_saved_cli_reports_stacking_validation_limit(project, capsys):

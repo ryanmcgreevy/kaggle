@@ -226,6 +226,18 @@ Extend ensembling to load compatible saved members from either backend instead o
 
 **Verification:** From `automl/`, `python -m pytest tests -q` passed with 635 tests and 1 GPU-dependent skip. Focused tests cover local restart/prediction round trips, saved-ensemble member fit counts, stacking's withheld validation score, local MLflow CLI loading, refit overwrite atomicity, and legacy ensemble fingerprint compatibility. `git diff --check` and Python compilation passed; local MLflow emitted one SQLAlchemy deprecation warning.
 
+## Phase 21: Separating Ensemble Evaluation and Fit-Only Workflows
+
+**Status:** Complete (2026-10-29).
+
+**Deliverable:** Add an explicit mode to candidate-based ensembling that separates outer-fold evaluation from fitting a prediction-ready ensemble. Preserve the existing evaluation behavior as the default. Fit-only mode builds the selected members from saved baseline, tuning, or model-family candidates and fits the final ensemble on all training rows without outer validation; stacking still uses inner out-of-fold predictions to train its meta-model. Fit-only results must clearly indicate that no ensemble validation score was computed and remain usable by the existing refit/prediction workflow.
+
+**Acceptance:** Synthetic tests prove evaluation mode keeps its current shared-split scores and behavior, while fit-only mode does not require or run outer validation, fits a prediction-ready ensemble, and reports no validation score. Cover classification voting and stacking, regression stacking, leakage-safe inner stacking, candidate selection, persistence/reload, refit prediction, and CLI/API parity. Document the mode, split requirements, score semantics, and resource tradeoffs. No new dependency or implicit change to existing callers.
+
+**Specification:** [requirements](./2026-10-29-ensemble-evaluation-and-fit-paths/requirements.md), [plan](./2026-10-29-ensemble-evaluation-and-fit-paths/plan.md), [validation](./2026-10-29-ensemble-evaluation-and-fit-paths/validation.md).
+
+**Verification:** Full suite passed: 641 passed, 1 GPU-dependent test skipped. The focused ensemble/CLI suite passed: 55 passed. Fit-only coverage includes classification voting and stacking, regression stacking, absent outer splits, no scoring, artifact reload, refit prediction, CLI/API parity, stderr progress, and explicit split rejection. `compileall` and `git diff --check` passed.
+
 ## Later, Explicitly Optional Work
 
 ### Optional: PyTorch Estimator

@@ -137,6 +137,7 @@ def _ensemble(args: argparse.Namespace) -> int:
             args.output_dir,
             splits_path=args.splits,
             method=args.method,
+            mode=args.mode,
             labels=args.label,
             stack_cv=args.stack_cv,
             n_jobs=args.n_jobs,
@@ -300,14 +301,23 @@ def build_parser() -> argparse.ArgumentParser:
     model_report.set_defaults(handler=_model_report)
 
     ensemble = commands.add_parser(
-        "ensemble", help="evaluate a voting or stacking ensemble from saved model candidates"
+        "ensemble", help="evaluate or fit a voting or stacking ensemble from saved model candidates"
     )
     _add_config(ensemble)
     ensemble.add_argument("sources", nargs="+", help="baseline, tuning, or tuning-families result directories")
     ensemble.add_argument("--output-dir", required=True, help="new directory for ensemble.json and ensemble.joblib")
     ensemble.add_argument("--method", choices=("voting", "stacking"), default="stacking")
+    ensemble.add_argument(
+        "--mode",
+        choices=("evaluate", "fit"),
+        default="evaluate",
+        help="evaluate on outer validation folds (default) or fit for prediction without outer validation",
+    )
     ensemble.add_argument("--label", action="append", help="candidate label to include; repeat to select several")
-    ensemble.add_argument("--splits", help="saved splits.json to reuse (default: build from [validation])")
+    ensemble.add_argument(
+        "--splits",
+        help="saved splits.json for evaluation mode (default: build from [validation]); not used in fit mode",
+    )
     ensemble.add_argument("--stack-cv", type=int, default=5, help="inner stacking folds (default: 5)")
     ensemble.add_argument(
         "--n-jobs",

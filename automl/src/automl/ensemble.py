@@ -53,11 +53,14 @@ class EnsembleConfig:
     meta_estimator: str | None = None
     meta_estimator_params: dict[str, Any] = field(default_factory=dict)
     save_model: bool = True
+    mode: str = "evaluate"
 
     def __post_init__(self) -> None:
         problems: list[str] = []
         if self.method not in METHODS:
             problems.append(f"setting 'method' has unsupported value {self.method!r}; valid: {list(METHODS)}")
+        if self.mode not in {"evaluate", "fit"}:
+            problems.append("setting 'mode' must be 'evaluate' or 'fit'")
         if isinstance(self.seed, bool) or not isinstance(self.seed, int):
             problems.append("setting 'seed' must be an integer")
         if isinstance(self.n_jobs, bool) or not isinstance(self.n_jobs, int) or (self.n_jobs != -1 and self.n_jobs < 1):
@@ -129,7 +132,7 @@ class EnsembleResult:
     std: float | None
     n_rows: int
     data_sha256: str
-    splits: dict[str, Any]
+    splits: dict[str, Any] | None
     config: EnsembleConfig
     meta_estimator: str | None
     feature_columns: tuple[str, ...]
@@ -169,12 +172,17 @@ class EnsembleResult:
             "files": {"model": MODEL_FILE if self.config.save_model else None},
             "validation_status": self.validation_status,
             "validation_limitation": self.validation_limitation,
-            "score_statement": (
-                "Scores are validation scores on the training data, optimistic after selection, "
-                "and are not leaderboard predictions."
-                if self.validation_status == "validated"
-                else "No ensemble validation score is reported because the saved artifacts cannot prove a leakage-safe score."
-            ),
+            "score_statement": {
+                "validated": (
+                    "Scores are validation scores on the training data, optimistic after selection, "
+                    "and are not leaderboard predictions."
+                ),
+                "unavailable": (
+                    "No ensemble validation score is reported because the saved artifacts cannot prove "
+                    "a leakage-safe score."
+                ),
+                "not_evaluated": "No validation was run in fit mode.",
+            }[self.validation_status],
         }
 
 
@@ -507,6 +515,8 @@ def run_saved_ensemble(
     meta-estimator did not train on the rows being scored.
     """
     cfg = config or EnsembleConfig()
+    if cfg.mode != "evaluate":
+        raise EnsembleError("mode='fit' applies only to candidate-based run_ensemble")
     task_value = getattr(resolved_task, "task", resolved_task)
     task = Task(getattr(task_value, "value", task_value))
     metric_name = getattr(getattr(resolved_task, "metric", None), "name", None)
@@ -713,8 +723,8 @@ def run_ensemble(
     target: str,
     id_columns: tuple[str, ...],
     resolved_task: Any,
-    splits: SplitResult,
-    sources: Any,
+    splits: SplitResult | None = None,
+    sources: Any = None,
     config: EnsembleConfig | None = None,
     *,
     labels: tuple[str, ...] | list[str] | None = None,
@@ -723,10 +733,12 @@ def run_ensemble(
     progress: ProgressCallback | None = None,
     verbose: bool = False,
 ) -> EnsembleResult:
-    """Evaluate a hard-voting or stacking ensemble from saved candidate directories.
+    """Evaluate or fit a hard-voting or stacking ensemble from saved candidate directories.
 
-    Candidate parameters and preprocessing are reused, but each fold's pipelines are fitted only
-    on that fold's training rows. Hyperparameter searches are never rerun.
+    Evaluation mode reuses candidate parameters and preprocessing, fitting only within each
+    validation fold before fitting a final ensemble on all rows. Fit mode skips outer validation
+    and only fits the final ensemble. Stacking uses inner cross-validation in either mode.
+    Hyperparameter searches are never rerun.
     """
     cfg = config or EnsembleConfig()
     task_value = getattr(resolved_task, "task", resolved_task)
@@ -740,28 +752,33 @@ def run_ensemble(
         raise EnsembleError(f"train data is missing target or ID columns {missing_columns}")
     if train[target].isna().any():
         raise EnsembleError(f"train target column {target!r} contains null values")
-    if splits.task is not task or splits.n_rows != len(train):
-        raise EnsembleError(
-            f"validation splits cover task {splits.task.value!r} and {splits.n_rows} rows; "
-            f"expected {task.value!r} and {len(train)} rows"
-        )
     if task not in get_metric(metric_name).tasks:
         raise EnsembleError(f"metric {metric_name!r} does not support task {task.value!r}")
-    if not splits.splits:
-        raise EnsembleError("validation splits must not be empty")
-    for split in splits.splits:
-        if (
-            len(split.train_idx) == 0
-            or len(split.valid_idx) == 0
-            or (split.train_idx < 0).any()
-            or (split.valid_idx < 0).any()
-            or (split.train_idx >= len(train)).any()
-            or (split.valid_idx >= len(train)).any()
-            or len(np.unique(split.train_idx)) != len(split.train_idx)
-            or len(np.unique(split.valid_idx)) != len(split.valid_idx)
-            or np.intersect1d(split.train_idx, split.valid_idx).size
-        ):
-            raise EnsembleError(f"fold {split.fold} has invalid, empty, or overlapping train/validation indices")
+    if cfg.mode == "evaluate":
+        if splits is None:
+            raise EnsembleError("evaluation mode requires validation splits; use mode='fit' to skip outer validation")
+        if splits.task is not task or splits.n_rows != len(train):
+            raise EnsembleError(
+                f"validation splits cover task {splits.task.value!r} and {splits.n_rows} rows; "
+                f"expected {task.value!r} and {len(train)} rows"
+            )
+        if not splits.splits:
+            raise EnsembleError("validation splits must not be empty")
+        for split in splits.splits:
+            if (
+                len(split.train_idx) == 0
+                or len(split.valid_idx) == 0
+                or (split.train_idx < 0).any()
+                or (split.valid_idx < 0).any()
+                or (split.train_idx >= len(train)).any()
+                or (split.valid_idx >= len(train)).any()
+                or len(np.unique(split.train_idx)) != len(split.train_idx)
+                or len(np.unique(split.valid_idx)) != len(split.valid_idx)
+                or np.intersect1d(split.train_idx, split.valid_idx).size
+            ):
+                raise EnsembleError(f"fold {split.fold} has invalid, empty, or overlapping train/validation indices")
+    elif splits is not None:
+        raise EnsembleError("fit mode does not accept outer validation splits; omit splits")
     if cfg.method == "stacking" and task is not Task.REGRESSION:
         min_class = int(train[target].value_counts().min())
         if cfg.stack_cv > min_class:
@@ -769,6 +786,8 @@ def run_ensemble(
                 f"setting 'stack_cv' ({cfg.stack_cv}) exceeds the smallest class count ({min_class})"
             )
     normalized_labels = (labels,) if isinstance(labels, str) else tuple(labels) if labels is not None else None
+    if sources is None:
+        raise EnsembleError("candidate result sources are required")
     cset = _candidate_set(sources, normalized_labels)
     if (cset.task, cset.metric, cset.direction) != (task.value, metric_name, get_metric(metric_name).direction):
         raise EnsembleError(
@@ -787,13 +806,16 @@ def run_ensemble(
             "stage.start",
             progress_started,
             method=cfg.method,
+            mode=cfg.mode,
             candidates=len(candidates),
-            n_folds=len(splits.splits),
+            n_folds=len(splits.splits) if splits is not None else 0,
         )
     fold_scores: list[float] = []
-    candidate_scores: dict[str, list[float]] = {candidate.label: [] for candidate in candidates}
+    candidate_scores: dict[str, list[float]] = (
+        {candidate.label: [] for candidate in candidates} if cfg.mode == "evaluate" else {}
+    )
     fold_rows: list[EnsembleFold] = []
-    for split in splits.splits:
+    for split in splits.splits if splits is not None else ():
         if progress is not None:
             emit_progress(progress, "ensemble", "fold.start", progress_started, fold=split.fold)
         fold_train = train.iloc[split.train_idx]
@@ -857,28 +879,54 @@ def run_ensemble(
     final_model = _make_model(full_estimators, task, cfg, meta)
     try:
         if progress is not None:
-            emit_progress(progress, "ensemble", "fit.start", progress_started, scope="all_training_rows")
+            for candidate in candidates:
+                emit_progress(
+                    progress,
+                    "ensemble",
+                    "model.start",
+                    progress_started,
+                    model=candidate.label,
+                    scope="all_training_rows",
+                )
+            emit_progress(
+                progress,
+                "ensemble",
+                "fit.start",
+                progress_started,
+                scope="all_training_rows",
+                mode=cfg.mode,
+            )
         final_model.fit(train.loc[:, feature_columns], y)
         if progress is not None:
+            for candidate in candidates:
+                emit_progress(
+                    progress,
+                    "ensemble",
+                    "model.complete",
+                    progress_started,
+                    model=candidate.label,
+                    scope="all_training_rows",
+                )
             emit_progress(progress, "ensemble", "fit.complete", progress_started, scope="all_training_rows")
     except (ValueError, TypeError, TaskMetricError) as exc:
         raise EnsembleError(f"fitting the final ensemble on all training rows failed: {exc}") from None
-    split_info = {
-        "strategy": splits.config.strategy,
-        "seed": splits.config.seed,
-        "n_splits": len(splits.splits),
-        "n_rows": splits.n_rows,
-        "stratified": splits.stratified,
-        "sha256": hashlib.sha256(
-            json.dumps(
-                [
-                    [split.fold, split.train_idx.tolist(), split.valid_idx.tolist()]
-                    for split in splits.splits
-                ],
-                separators=(",", ":"),
-            ).encode()
-        ).hexdigest(),
-    }
+    split_info = (
+        {
+            "strategy": splits.config.strategy,
+            "seed": splits.config.seed,
+            "n_splits": len(splits.splits),
+            "n_rows": splits.n_rows,
+            "stratified": splits.stratified,
+            "sha256": hashlib.sha256(
+                json.dumps(
+                    [[split.fold, split.train_idx.tolist(), split.valid_idx.tolist()] for split in splits.splits],
+                    separators=(",", ":"),
+                ).encode()
+            ).hexdigest(),
+        }
+        if splits is not None
+        else None
+    )
     result = EnsembleResult(
         task=task,
         metric=metric_name,
@@ -891,15 +939,18 @@ def run_ensemble(
                 "source_path": candidate.source_path,
                 "estimator": candidate.estimator_key,
                 "params": candidate.params,
-                "validation_mean": candidate.mean,
-                "validation_std": candidate.std,
+                **(
+                    {"source_validation_mean": candidate.mean, "source_validation_std": candidate.std}
+                    if cfg.mode == "fit"
+                    else {"validation_mean": candidate.mean, "validation_std": candidate.std}
+                ),
             }
             for candidate in candidates
         },
         candidate_fold_scores={label: tuple(scores) for label, scores in candidate_scores.items()},
         folds=tuple(fold_rows),
-        mean=float(np.mean(fold_scores)),
-        std=float(np.std(fold_scores)),
+        mean=float(np.mean(fold_scores)) if fold_scores else None,
+        std=float(np.std(fold_scores)) if fold_scores else None,
         n_rows=len(train),
         data_sha256=data_fingerprint(train),
         splits=split_info,
@@ -909,6 +960,12 @@ def run_ensemble(
         feature_roles=feature_roles,
         classes=tuple(sorted(y.unique())) if task is not Task.REGRESSION else (),
         model=final_model,
+        validation_status="validated" if cfg.mode == "evaluate" else "not_evaluated",
+        validation_limitation=(
+            None
+            if cfg.mode == "evaluate"
+            else "fit mode skips outer validation; no ensemble or candidate validation score was computed"
+        ),
     )
     if directory is not None:
         result = replace(result, directory=save_ensemble(result, directory))
@@ -1006,16 +1063,18 @@ def load_ensemble(directory: str | Path, *, load_model: bool = False) -> LoadedE
         if not isinstance(raw["candidate_details"], dict) or set(raw["candidate_details"]) != set(candidates):
             raise ValueError("candidate_details must describe every selected candidate")
         validation_status = raw.get("validation_status", "validated")
-        if validation_status not in {"validated", "unavailable"}:
-            raise ValueError("validation_status must be 'validated' or 'unavailable'")
+        if validation_status not in {"validated", "unavailable", "not_evaluated"}:
+            raise ValueError("validation_status must be 'validated', 'unavailable', or 'not_evaluated'")
         if not isinstance(raw["folds"], list) or (validation_status == "validated" and not raw["folds"]):
             raise ValueError("folds must be a list and non-empty when validation is available")
+        if validation_status == "not_evaluated" and (config.mode != "fit" or raw["folds"]):
+            raise ValueError("not_evaluated requires fit mode and no validation folds")
         summary = raw["summary"]
         if not isinstance(summary, dict):
             raise ValueError("summary must be an object")
-        if validation_status == "unavailable":
+        if validation_status in {"unavailable", "not_evaluated"}:
             if summary.get("mean") is not None or summary.get("std") is not None:
-                raise ValueError("summary scores must be null when validation_status is unavailable")
+                raise ValueError(f"summary scores must be null when validation_status is {validation_status}")
         elif any(
             isinstance(summary.get(key), bool)
             or not isinstance(summary.get(key), (int, float))

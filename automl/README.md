@@ -541,14 +541,18 @@ Limits: every page states that scores are validation scores on the training data
 
 ## Model Ensembling
 
-`run_ensemble` takes saved baseline, tuning, or model-family result directories, reuses their estimator parameters and preprocessing, and evaluates the requested ensemble on the provided `SplitResult`. It rebuilds and fits base pipelines within each training fold; hyperparameter search is not repeated. Stacking learns its meta-model from out-of-fold base predictions inside each outer training fold. After evaluation it fits one final ensemble on all training rows for prediction. It requires no optional dependency beyond the selected candidates' model libraries.
+`run_ensemble` takes saved baseline, tuning, or model-family result directories and reuses their estimator parameters and preprocessing; hyperparameter search is not repeated. By default, `mode="evaluate"` evaluates the ensemble and its members on the provided `SplitResult`, then fits one final ensemble on all training rows for prediction. `mode="fit"` skips that outer evaluation and only fits the prediction-ready ensemble on all training rows. Stacking uses inner out-of-fold predictions to train its meta-model in either mode; that inner CV is needed for leakage-safe stacking and is distinct from optional outer evaluation. Fit mode reports no validation score.
 
 ```bash
 automl ensemble run.toml runs/1/baseline runs/1/tuning \
   --method stacking --splits runs/1/splits/splits.json \
   --output-dir runs/1/ensemble
+automl ensemble run.toml runs/1/baseline runs/1/tuning \
+  --method stacking --mode fit --output-dir runs/1/ensemble-fit
 automl refit run.toml runs/1/ensemble --output-dir runs/1/refit
 ```
+
+Use the default `--mode evaluate` to compare fold-wise ensemble and candidate scores on shared outer splits. Use `--mode fit` when you only need a prediction-ready ensemble and do not want those extra outer-fold fits; omit `--splits`. Fit mode does not estimate or report ensemble validation performance. It still performs stacking's inner CV, while voting fits members once on all training rows. The fit-mode artifact can be passed to `automl refit` in the same way as an evaluated ensemble.
 
 To reuse already-fitted pipelines without refitting ensemble members, pass at least two fitted-model references to `ensemble-saved`:
 
@@ -561,7 +565,7 @@ Hard voting uses saved fold-excluded predictions and performs zero fits. Saved s
 
 Classification supports `--method voting` (hard majority vote) and `--method stacking`; regression supports stacking only. The default stacking meta-model is LogisticRegression for classification and RidgeCV for regression. Choose a different supported meta-estimator with `--meta-estimator` and optional JSON `--meta-estimator-params`. Use `--label` repeatedly to select candidate labels; otherwise all compatible candidates from the supplied directories are used. When selecting labels, obtain them from `collect_candidates` or the `model-report` summary. Hard voting uses predicted class labels and class ordering breaks ties; probability metrics other than binary ROC AUC require stacking.
 
-Use `--n-jobs 2` to request two parallel jobs within stacking/voting, or `--n-jobs -1` for all available cores. Without the flag, `[baseline].n_jobs` is used (default `1`), preserving existing behavior. Outer validation folds remain sequential. This setting does not override the saved candidate models' thread counts or meta-estimator parameters. Parallel workers increase memory use; combining many workers with multi-threaded candidate models can oversubscribe CPUs, so choose a bounded worker count when resources are shared.
+Use `--n-jobs 2` to request two parallel jobs within stacking/voting, or `--n-jobs -1` for all available cores. Without the flag, `[baseline].n_jobs` is used (default `1`), preserving existing behavior. Evaluation mode's outer validation folds remain sequential. This setting does not override candidate-model thread counts or meta-estimator parameters. Parallel workers increase memory use; combining many workers with multi-threaded candidate models can oversubscribe CPUs, so choose a bounded worker count when resources are shared.
 
 ```python
 from automl import EnsembleConfig, load_config, load_data, make_splits, resolve_task_metric, run_ensemble
@@ -579,9 +583,9 @@ result = run_ensemble(
 result.mean, result.std, result.candidates
 ```
 
-The JSON artifact (`ensemble.json`, schema version 1) records candidates, per-fold and summary metrics, split settings, feature columns and roles, task/metric, and the data fingerprint. `ensemble.joblib` contains the final model fitted on all rows; it is a pickle and should be loaded only from a trusted directory. `load_ensemble` reads metadata without deserializing the model; pass `load_model=True` only for trusted artifacts. `automl refit` accepts the ensemble directory and rejects a different training dataset. Existing output directories are not overwritten.
+For fit-only use, omit split construction and pass `splits=None`, `sources=...`, and `EnsembleConfig(mode="fit")`. The JSON artifact (`ensemble.json`, schema version 1) records the mode, candidates, validation status, per-fold/summary metrics when evaluated, split settings when used, feature columns and roles, task/metric, and data fingerprint. Fit-only artifacts have `validation_status="not_evaluated"`, null summary scores, no folds, and no newly computed candidate scores. Candidate details may include `source_validation_mean` and `source_validation_std`, which refer only to metrics saved with the original candidates. `ensemble.joblib` contains the final model fitted on all rows; it is a pickle and should be loaded only from a trusted directory. `load_ensemble` reads metadata without deserializing the model; pass `load_model=True` only for trusted artifacts. `automl refit` accepts either mode's ensemble directory and rejects a different training dataset. Existing output directories are not overwritten.
 
-Limits: validation scores are optimistic after candidate/ensemble selection and are not leaderboard claims. Hard voting cannot calculate log loss or other probability-required metrics. Ensembles are not guaranteed to beat their members. `ensemble-saved` supports compatible local model directories and MLflow `runs:/` references; MLflow references need the tracking URI configured. Python API: `run_ensemble`, `run_saved_ensemble`, `load_fitted_model`, `load_ensemble`, `save_ensemble`.
+Limits: evaluation scores are optimistic after candidate/ensemble selection and are not leaderboard claims; fit mode does not compute a validation score. Hard voting cannot calculate log loss or other probability-required metrics. Ensembles are not guaranteed to beat their members. `ensemble-saved` supports compatible local model directories and MLflow `runs:/` references; MLflow references need the tracking URI configured. Python API: `run_ensemble`, `run_saved_ensemble`, `load_fitted_model`, `load_ensemble`, `save_ensemble`.
 
 ## Refit and Prediction
 

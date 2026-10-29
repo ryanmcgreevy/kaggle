@@ -429,6 +429,7 @@ def ensemble_stage(
     *,
     splits_path: str | Path | None = None,
     method: str = "stacking",
+    mode: str = "evaluate",
     labels: Sequence[str] | None = None,
     stack_cv: int = 5,
     n_jobs: int | None = None,
@@ -439,15 +440,21 @@ def ensemble_stage(
 ) -> dict[str, Any]:
     out = Path(output_dir)
     _new_dir(out, "ensemble", EnsembleError)
-    splits, splits_info = _splits(ctx, splits_path)
     config = EnsembleConfig(
         method=method,
+        mode=mode,
         seed=ctx.config.baseline_config.seed,
         n_jobs=ctx.config.baseline_config.n_jobs if n_jobs is None else n_jobs,
         stack_cv=stack_cv,
         meta_estimator=meta_estimator,
         meta_estimator_params=meta_estimator_params or {},
     )
+    if config.mode == "fit":
+        if splits_path is not None:
+            raise EnsembleError("--splits applies only to evaluation mode; omit it when using --mode fit")
+        splits, splits_info = None, None
+    else:
+        splits, splits_info = _splits(ctx, splits_path)
     result = run_ensemble(
         ctx.bundle.train,
         ctx.config.target,
@@ -468,6 +475,7 @@ def ensemble_stage(
             "path": str(out / "ensemble.json"),
             "model_path": str(out / "ensemble.joblib"),
             "method": result.method,
+            "mode": result.config.mode,
             "task": result.task.value,
             "metric": result.metric,
             "direction": result.direction,
@@ -477,6 +485,8 @@ def ensemble_stage(
             "n_folds": len(result.folds),
             "candidate_scores": result.to_dict()["candidate_scores"],
             "splits": splits_info,
+            "validation_status": result.validation_status,
+            "validation_limitation": result.validation_limitation,
             "data": ctx.data_files,
         }
     )
