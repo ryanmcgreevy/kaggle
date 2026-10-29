@@ -201,7 +201,7 @@ def _from_baseline(res: BaselineResult, path: str) -> Candidate:
         source_path=path,
         estimator_key=res.estimator_key,
         estimator=res.estimator,
-        params=_plain(res.estimator_params),
+        params=_plain(res.config.estimator_params),
         mean=res.mean,
         std=res.std,
         fold_scores=scores,

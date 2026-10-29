@@ -274,6 +274,39 @@ def test_stacking_fits_native_lightgbm_candidate(tmp_path):
     assert any(label.startswith("tuned:lightgbm") for label in result.candidates)
 
 
+def test_stacking_fits_xgboost_baseline_with_default_missing_value(tmp_path):
+    pytest.importorskip("xgboost")
+    train, _, resolved, splits, sources = saved_candidates(tmp_path)
+    xgboost = run_baseline(
+        train,
+        "target",
+        ("id",),
+        resolved,
+        splits,
+        BaselineConfig(
+            seed=11,
+            estimator="xgboost",
+            native_categoricals=True,
+            estimator_params={"n_estimators": 5, "max_depth": 2},
+        ),
+    )
+    xgboost_dir = tmp_path / "xgboost"
+    save_baseline(xgboost, xgboost_dir)
+
+    result = run_ensemble(
+        train,
+        "target",
+        ("id",),
+        resolved,
+        splits,
+        [sources[0], xgboost_dir],
+        EnsembleConfig(method="stacking", seed=11, stack_cv=3),
+    )
+
+    assert np.isfinite(result.mean)
+    assert any(label.startswith("baseline:xgboost") for label in result.candidates)
+
+
 def test_voting_rejects_regression_and_probability_only_metric(tmp_path):
     train, _, resolved, splits, sources = saved_candidates(tmp_path, Task.REGRESSION)
     with pytest.raises(EnsembleError, match="classification-only"):
